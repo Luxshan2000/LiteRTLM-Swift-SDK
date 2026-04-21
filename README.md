@@ -4,6 +4,51 @@ Production-grade Swift SDK for [Google's LiteRT-LM](https://github.com/google-ai
 
 **iOS 17+ | macOS 14+ | Swift 5.9+**
 
+```mermaid
+graph TB
+    subgraph App["Your Application"]
+        UI[SwiftUI / UIKit]
+    end
+
+    subgraph SDK["LiteRTLM Swift SDK"]
+        direction TB
+        DL[LiteRTLMDownloader<br><i>Download / Pause / Resume</i>]
+        
+        subgraph Core["LiteRTLM"]
+            Engine["LMEngine (Actor)<br><i>Model Lifecycle</i>"]
+            Session["LMSession<br><i>Text Streaming</i>"]
+            Conv["LMConversation<br><i>Multi-turn + Multimodal</i>"]
+            Tools["Tool Calling<br><i>OpenAPI Schema</i>"]
+        end
+    end
+
+    subgraph Runtime["CLiteRTLM.xcframework"]
+        CAPI["C API Bridge"]
+        LiteRT["Google LiteRT-LM<br><i>On-device Inference</i>"]
+    end
+
+    subgraph HW["Hardware"]
+        CPU[CPU]
+        GPU["GPU (Metal)"]
+    end
+
+    UI --> DL
+    UI --> Engine
+    Engine --> Session
+    Engine --> Conv
+    Conv --> Tools
+    Session --> CAPI
+    Conv --> CAPI
+    CAPI --> LiteRT
+    LiteRT --> CPU
+    LiteRT --> GPU
+
+    style App fill:#e8f5e9,stroke:#2e7d32
+    style SDK fill:#e3f2fd,stroke:#1565c0
+    style Runtime fill:#fff3e0,stroke:#e65100
+    style HW fill:#f3e5f5,stroke:#6a1b9a
+```
+
 ---
 
 ## Features
@@ -329,29 +374,6 @@ ConversationConfiguration()
 ---
 
 ## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Your Application                   │
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
-│  │   LiteRTLM   │  │LiteRTLM     │  │  (Future)  │ │
-│  │  (Main SDK)  │  │Downloader   │  │  DocC Docs │ │
-│  └──────┬───────┘  └──────────────┘  └────────────┘ │
-│         │                                            │
-│  ┌──────┴───────────────────────────────────┐       │
-│  │  LMEngine (Actor)                         │       │
-│  │  ├── createSession() → LMSession          │       │
-│  │  └── createConversation() → LMConversation│       │
-│  └──────┬───────────────────────────────────┘       │
-│         │                                            │
-│  ┌──────┴───────────────────────────────────┐       │
-│  │  CLiteRTLM.xcframework (Binary)           │       │
-│  │  C API → Google's LiteRT-LM runtime       │       │
-│  └───────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────┘
-```
 
 ### Module Breakdown
 
