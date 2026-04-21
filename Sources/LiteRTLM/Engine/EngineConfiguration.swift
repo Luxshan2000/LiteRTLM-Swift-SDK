@@ -8,51 +8,35 @@ public enum Backend: String, Sendable {
 
 /// Log verbosity level.
 public enum LogLevel: Int, Sendable {
-    case verbose = 0
-    case info = 1
-    case warning = 2
-    case error = 3
+    case info = 0
+    case warning = 1
+    case error = 2
+    case fatal = 3
     case silent = 4
 }
 
 /// Configuration for creating an `LMEngine`.
 ///
-/// Use the builder-style API:
 /// ```swift
 /// let config = EngineConfiguration(modelPath: modelURL)
 ///     .backend(.gpu)
 ///     .cacheDirectory(cacheURL)
 ///     .benchmarkEnabled(true)
-///     .logLevel(.warning)
 /// ```
 public struct EngineConfiguration: Sendable {
 
-    /// Path to the `.litertlm` model file.
     public let modelPath: URL
-
-    /// Primary compute backend.
     public private(set) var primaryBackend: Backend = .cpu
-
-    /// Optional fallback backends (up to 2).
-    public private(set) var fallbackBackends: [Backend] = []
-
-    /// Maximum number of tokens the engine can handle.
+    public private(set) var visionBackend: Backend?
+    public private(set) var audioBackend: Backend?
     public private(set) var maxTokens: Int?
-
-    /// Directory for caching compiled model artifacts.
     public private(set) var cacheDir: URL?
-
-    /// Enable benchmark timing instrumentation.
     public private(set) var isBenchmarkEnabled: Bool = false
-
-    /// Minimum log level.
     public private(set) var logLevel: LogLevel = .warning
 
     public init(modelPath: URL) {
         self.modelPath = modelPath
     }
-
-    // MARK: - Builder Methods
 
     public func backend(_ backend: Backend) -> EngineConfiguration {
         var copy = self
@@ -60,9 +44,15 @@ public struct EngineConfiguration: Sendable {
         return copy
     }
 
-    public func fallbacks(_ backends: Backend...) -> EngineConfiguration {
+    public func visionBackend(_ backend: Backend) -> EngineConfiguration {
         var copy = self
-        copy.fallbackBackends = Array(backends.prefix(2))
+        copy.visionBackend = backend
+        return copy
+    }
+
+    public func audioBackend(_ backend: Backend) -> EngineConfiguration {
+        var copy = self
+        copy.audioBackend = backend
         return copy
     }
 

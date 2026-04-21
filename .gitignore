@@ -15,9 +15,6 @@ build/
 .swiftpm/
 Package.resolved
 
-# XCFramework (large binary — download or build locally)
-Frameworks/*.xcframework
-
 # macOS
 .DS_Store
 *.swp

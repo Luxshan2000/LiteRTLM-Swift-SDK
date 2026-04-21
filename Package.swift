@@ -14,11 +14,10 @@ let package = Package(
     ],
     targets: [
         // Pre-built C framework from Google's LiteRT-LM.
-        // Hosted as a GitHub release asset — SPM downloads it automatically.
+        // Built from https://github.com/google-ai-edge/LiteRT-LM via Bazel.
         .binaryTarget(
             name: "CLiteRTLM",
-            url: "https://github.com/Luxshan2000/LiteRTLM-Swift-SDK/releases/download/v0.1.0/CLiteRTLM.xcframework.zip",
-            checksum: "PLACEHOLDER_CHECKSUM"
+            path: "Frameworks/LiteRTLM.xcframework"
         ),
 
         // Main Swift SDK

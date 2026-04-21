@@ -1,44 +1,61 @@
 import Foundation
+import CLiteRTLM
 
 /// Performance metrics collected during inference.
 public struct BenchmarkInfo: Sendable {
 
-    /// Total engine initialization time in seconds.
     public let initTime: Double
-
-    /// Time to first token in seconds.
     public let timeToFirstToken: Double
-
-    /// Per-turn prefill metrics.
     public let prefillTurns: [TurnMetric]
-
-    /// Per-turn decode metrics.
     public let decodeTurns: [TurnMetric]
 
-    /// A single turn's performance data.
     public struct TurnMetric: Sendable {
-        /// Tokens processed per second.
         public let tokensPerSecond: Double
-        /// Total token count in this turn.
         public let tokenCount: Int
     }
 
-    /// Average decode speed across all turns (tokens/sec).
     public var averageDecodeSpeed: Double {
         guard !decodeTurns.isEmpty else { return 0 }
-        let total = decodeTurns.reduce(0.0) { $0 + $1.tokensPerSecond }
-        return total / Double(decodeTurns.count)
+        return decodeTurns.reduce(0.0) { $0 + $1.tokensPerSecond } / Double(decodeTurns.count)
     }
 
-    /// Average prefill speed across all turns (tokens/sec).
     public var averagePrefillSpeed: Double {
         guard !prefillTurns.isEmpty else { return 0 }
-        let total = prefillTurns.reduce(0.0) { $0 + $1.tokensPerSecond }
-        return total / Double(prefillTurns.count)
+        return prefillTurns.reduce(0.0) { $0 + $1.tokensPerSecond } / Double(prefillTurns.count)
     }
 
-    /// Total tokens generated across all decode turns.
     public var totalTokensGenerated: Int {
         decodeTurns.reduce(0) { $0 + $1.tokenCount }
+    }
+
+    /// Create from the C benchmark info handle.
+    static func from(cInfo info: OpaquePointer) -> BenchmarkInfo {
+        let initTime = litert_lm_benchmark_info_get_total_init_time_in_second(info)
+        let ttft = litert_lm_benchmark_info_get_time_to_first_token(info)
+        let numPrefill = litert_lm_benchmark_info_get_num_prefill_turns(info)
+        let numDecode = litert_lm_benchmark_info_get_num_decode_turns(info)
+
+        var prefillTurns: [TurnMetric] = []
+        for i in 0..<Int32(numPrefill) {
+            prefillTurns.append(.init(
+                tokensPerSecond: litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(info, i),
+                tokenCount: Int(litert_lm_benchmark_info_get_prefill_token_count_at(info, i))
+            ))
+        }
+
+        var decodeTurns: [TurnMetric] = []
+        for i in 0..<Int32(numDecode) {
+            decodeTurns.append(.init(
+                tokensPerSecond: litert_lm_benchmark_info_get_decode_tokens_per_sec_at(info, i),
+                tokenCount: Int(litert_lm_benchmark_info_get_decode_token_count_at(info, i))
+            ))
+        }
+
+        return BenchmarkInfo(
+            initTime: initTime,
+            timeToFirstToken: ttft,
+            prefillTurns: prefillTurns,
+            decodeTurns: decodeTurns
+        )
     }
 }

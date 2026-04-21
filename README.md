@@ -406,22 +406,13 @@ To run: `cd Examples/ChatDemo && xcodegen generate && open ChatDemo.xcodeproj`
 
 ---
 
-## Building the XCFramework
+## Building the XCFramework from Source
 
-The SDK ships the xcframework as a binary target downloaded automatically by SPM. To build it yourself from Google's source:
+The SDK ships with a pre-built `CLiteRTLM.xcframework` — no extra steps needed. If you want to rebuild it from Google's LiteRT-LM source:
 
 ```bash
-./scripts/build-xcframework.sh
-# Or with an existing checkout:
 ./scripts/build-xcframework.sh --repo-path /path/to/LiteRT-LM
 ```
-
-**Prerequisites:** Bazel 7.6.1+, Xcode 16+, ~10 GB disk space.
-
-**Output slices:**
-- `ios-arm64` (device)
-- `ios-arm64-simulator`
-- `macos-arm64`
 
 ---
 

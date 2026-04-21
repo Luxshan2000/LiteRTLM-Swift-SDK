@@ -7,11 +7,15 @@ final class LiteRTLMTests: XCTestCase {
         let url = URL(fileURLWithPath: "/tmp/model.litertlm")
         let config = EngineConfiguration(modelPath: url)
             .backend(.gpu)
+            .visionBackend(.gpu)
+            .audioBackend(.cpu)
             .maxTokens(4096)
             .benchmarkEnabled(true)
             .logLevel(.warning)
 
         XCTAssertEqual(config.primaryBackend, .gpu)
+        XCTAssertEqual(config.visionBackend, .gpu)
+        XCTAssertEqual(config.audioBackend, .cpu)
         XCTAssertEqual(config.maxTokens, 4096)
         XCTAssertTrue(config.isBenchmarkEnabled)
         XCTAssertEqual(config.logLevel, .warning)
@@ -30,6 +34,15 @@ final class LiteRTLMTests: XCTestCase {
         XCTAssertEqual(SamplerConfiguration.greedy.temperature, 0.0)
         XCTAssertEqual(SamplerConfiguration.balanced.temperature, 0.7)
         XCTAssertEqual(SamplerConfiguration.creative.temperature, 1.0)
+    }
+
+    func testSamplerToCParams() {
+        let sampler = SamplerConfiguration(temperature: 0.5, topK: 20, topP: 0.9, seed: 42, samplerType: .topP)
+        let cParams = sampler.toCParams()
+        XCTAssertEqual(cParams.temperature, 0.5)
+        XCTAssertEqual(cParams.top_k, 20)
+        XCTAssertEqual(cParams.top_p, 0.9)
+        XCTAssertEqual(cParams.seed, 42)
     }
 
     func testConversationConfigurationBuilder() {
@@ -60,8 +73,7 @@ final class LiteRTLMTests: XCTestCase {
     }
 
     func testPromptTemplateRaw() {
-        let formatted = PromptTemplate.raw.formatSingle("Hello")
-        XCTAssertEqual(formatted, "Hello")
+        XCTAssertEqual(PromptTemplate.raw.formatSingle("Hello"), "Hello")
     }
 
     func testPromptTemplateConversation() {
@@ -106,15 +118,12 @@ final class LiteRTLMTests: XCTestCase {
         XCTAssertNotNil(schema["function"])
     }
 
-    func testEngineInitialState() {
+    func testEngineInitialState() async {
         let url = URL(fileURLWithPath: "/tmp/model.litertlm")
         let config = EngineConfiguration(modelPath: url)
         let engine = LMEngine(configuration: config)
-
-        Task {
-            let isReady = await engine.isReady
-            XCTAssertFalse(isReady)
-        }
+        let isReady = await engine.isReady
+        XCTAssertFalse(isReady)
     }
 
     func testTokenStreamCollect() async throws {
@@ -141,22 +150,26 @@ final class LiteRTLMTests: XCTestCase {
                 .init(tokensPerSecond: 32, tokenCount: 150),
             ]
         )
-
         XCTAssertEqual(info.averagePrefillSpeed, 110.0)
         XCTAssertEqual(info.averageDecodeSpeed, 31.0)
         XCTAssertEqual(info.totalTokensGenerated, 350)
     }
 
     func testConversationResponseParsing() {
-        // Plain text passthrough
         XCTAssertEqual(LMConversation.parseResponseJSON("hello"), "hello")
+        XCTAssertEqual(LMConversation.parseResponseJSON(#"{"text": "parsed"}"#), "parsed")
+        XCTAssertEqual(LMConversation.parseResponseJSON(#"{"content": "content"}"#), "content")
+    }
 
-        // JSON with text field
-        let json = #"{"text": "parsed response"}"#
-        XCTAssertEqual(LMConversation.parseResponseJSON(json), "parsed response")
-
-        // JSON with content field
-        let json2 = #"{"content": "content response"}"#
-        XCTAssertEqual(LMConversation.parseResponseJSON(json2), "content response")
+    func testErrorDescriptions() {
+        let errors: [LiteRTLMError] = [
+            .engineNotReady,
+            .noActiveSession,
+            .emptyResponse,
+            .modelNotFound(path: "/tmp/x"),
+        ]
+        for error in errors {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
     }
 }

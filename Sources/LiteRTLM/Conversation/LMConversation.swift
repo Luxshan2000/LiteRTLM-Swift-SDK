@@ -1,18 +1,12 @@
 import Foundation
 import CLiteRTLM
 
-/// A multi-turn conversation with automatic history management and multimodal support.
-///
-/// Conversations maintain context via KV-cache and support text, vision, audio,
-/// and tool calling.
+/// A multi-turn conversation with automatic history, multimodal support, and tool calling.
 ///
 /// ```swift
 /// let conversation = try await engine.createConversation()
 /// let response = try await conversation.send("Hello!")
-/// let visionResponse = try await conversation.send(
-///     "What's in this image?",
-///     images: [photoData]
-/// )
+/// let vision = try await conversation.send("What's in this image?", images: [photoData])
 /// conversation.close()
 /// ```
 public final class LMConversation: @unchecked Sendable {
@@ -20,27 +14,18 @@ public final class LMConversation: @unchecked Sendable {
     private let engine: LMEngine
     private var cConversation: OpaquePointer?
     private let config: ConversationConfiguration
-    private let queue = DispatchQueue(
-        label: "com.litertlm.conversation", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.litertlm.conversation", qos: .userInitiated)
 
-    /// Conversation history for reference.
     public private(set) var history: [Message] = []
 
-    init(
-        engine: LMEngine,
-        cConversation: OpaquePointer,
-        configuration: ConversationConfiguration
-    ) {
+    init(engine: LMEngine, cConversation: OpaquePointer, configuration: ConversationConfiguration) {
         self.engine = engine
         self.cConversation = cConversation
         self.config = configuration
     }
 
-    deinit {
-        close()
-    }
+    deinit { close() }
 
-    /// Whether this conversation is still active.
     public var isActive: Bool { cConversation != nil }
 
     /// Close the conversation and release resources.
@@ -52,11 +37,17 @@ public final class LMConversation: @unchecked Sendable {
         history.removeAll()
     }
 
+    /// Cancel an in-progress generation.
+    public func cancel() {
+        guard let conversation = cConversation else { return }
+        litert_lm_conversation_cancel_process(conversation)
+    }
+
     // MARK: - Send Message
 
-    /// Send a text message in the conversation.
+    /// Send a text message.
     public func send(_ text: String) async throws -> String {
-        return try await send(text, images: [], audio: [], audioFormat: .wav)
+        try await send(text, images: [], audio: [])
     }
 
     /// Send a multimodal message with optional images and audio.
@@ -70,21 +61,13 @@ public final class LMConversation: @unchecked Sendable {
             throw LiteRTLMError.noActiveConversation
         }
 
-        // Build the multimodal message JSON
-        let messageJSON = try buildMessageJSON(
-            text: text,
-            images: images,
-            audio: audio,
-            audioFormat: audioFormat
-        )
+        let messageJSON = try buildMessageJSON(text: text, images: images, audio: audio)
 
-        // Record in history
         var contentParts: [Content] = [.text(text)]
         for img in images { contentParts.append(.image(img)) }
         for aud in audio { contentParts.append(.audio(aud, format: audioFormat)) }
         history.append(Message(role: .user, content: contentParts))
 
-        // Send to C API
         let response: String = try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard let jsonResponse = litert_lm_conversation_send_message(
@@ -101,20 +84,89 @@ public final class LMConversation: @unchecked Sendable {
                 }
 
                 let raw = String(cString: cStr)
-                let parsed = Self.parseResponseJSON(raw)
-                continuation.resume(returning: parsed)
+                continuation.resume(returning: Self.parseResponseJSON(raw))
             }
         }
 
-        // Record model response
         history.append(.model(response))
 
-        // Handle tool calls if present
         if let toolCall = parseToolCall(response) {
             return try await handleToolCall(toolCall, conversation: conversation)
         }
 
         return response
+    }
+
+    /// Send a message and stream the response token by token.
+    public func sendStream(
+        _ text: String,
+        images: [Data] = [],
+        audio: [Data] = [],
+        audioFormat: AudioFormat = .wav
+    ) throws -> TokenStream {
+        guard let conversation = cConversation else {
+            throw LiteRTLMError.noActiveConversation
+        }
+
+        let messageJSON = (try? buildMessageJSON(text: text, images: images, audio: audio)) ?? text
+
+        var contentParts: [Content] = [.text(text)]
+        for img in images { contentParts.append(.image(img)) }
+        for aud in audio { contentParts.append(.audio(aud, format: audioFormat)) }
+        history.append(Message(role: .user, content: contentParts))
+
+        let q = self.queue
+
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            q.async {
+                final class StreamCtx {
+                    let cont: AsyncThrowingStream<String, Error>.Continuation
+                    var accumulated = ""
+                    init(_ c: AsyncThrowingStream<String, Error>.Continuation) { self.cont = c }
+                }
+                let ctx = StreamCtx(continuation)
+                let ctxPtr = Unmanaged.passRetained(ctx).toOpaque()
+
+                let result = litert_lm_conversation_send_message_stream(
+                    conversation, messageJSON, nil,
+                    { callbackData, chunk, isFinal, errorMsg in
+                        guard let callbackData else { return }
+                        let ctx = Unmanaged<StreamCtx>.fromOpaque(callbackData)
+
+                        if let errorMsg {
+                            ctx.takeUnretainedValue().cont.finish(
+                                throwing: LiteRTLMError.streamingError(message: String(cString: errorMsg)))
+                            ctx.release()
+                            return
+                        }
+
+                        if let chunk {
+                            let str = String(cString: chunk)
+                            if !str.isEmpty {
+                                ctx.takeUnretainedValue().accumulated += str
+                                ctx.takeUnretainedValue().cont.yield(str)
+                            }
+                        }
+
+                        if isFinal {
+                            ctx.takeUnretainedValue().cont.finish()
+                            ctx.release()
+                        }
+                    },
+                    ctxPtr
+                )
+
+                if result != 0 {
+                    Unmanaged<StreamCtx>.fromOpaque(ctxPtr)
+                        .takeRetainedValue()
+                        .cont
+                        .finish(throwing: LiteRTLMError.streamingError(
+                            message: "Stream initiation failed with code \(result)"))
+                }
+            }
+        }
+
+        return TokenStream(stream)
     }
 
     // MARK: - Tool Handling
@@ -125,25 +177,20 @@ public final class LMConversation: @unchecked Sendable {
     }
 
     private func parseToolCall(_ response: String) -> ToolCall? {
-        // Look for function call patterns in the response
-        // The model outputs JSON like: {"function_call": {"name": "...", "arguments": {...}}}
         guard let data = response.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let funcCall = json["function_call"] as? [String: Any],
               let name = funcCall["name"] as? String else {
             return nil
         }
-        let args = funcCall["arguments"] as? [String: Any] ?? [:]
-        return ToolCall(name: name, arguments: args)
+        return ToolCall(name: name, arguments: funcCall["arguments"] as? [String: Any] ?? [:])
     }
 
-    private func handleToolCall(
-        _ toolCall: ToolCall,
-        conversation: OpaquePointer
-    ) async throws -> String {
+    private func handleToolCall(_ toolCall: ToolCall, conversation: OpaquePointer) async throws -> String {
         guard config.toolExecutionMode == .automatic else {
-            // In manual mode, return the raw tool call for the caller to handle
-            return try serializeToolCall(toolCall)
+            let dict: [String: Any] = ["function_call": ["name": toolCall.name, "arguments": toolCall.arguments]]
+            let data = try JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted)
+            return String(data: data, encoding: .utf8) ?? "{}"
         }
 
         guard let tool = config.tools.first(where: { $0.name == toolCall.name }) else {
@@ -151,11 +198,9 @@ public final class LMConversation: @unchecked Sendable {
         }
 
         let result = try await tool.execute(toolCall.arguments)
-        let resultJSON = try JSONSerialization.data(
-            withJSONObject: result, options: [])
+        let resultJSON = try JSONSerialization.data(withJSONObject: result, options: [])
         let resultStr = String(data: resultJSON, encoding: .utf8) ?? "{}"
 
-        // Feed tool result back to the model
         let toolMessage = "<start_of_turn>tool\n\(resultStr)<end_of_turn>\n<start_of_turn>model\n"
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -172,67 +217,25 @@ public final class LMConversation: @unchecked Sendable {
                     continuation.resume(throwing: LiteRTLMError.emptyResponse)
                     return
                 }
-
-                let raw = String(cString: cStr)
-                let parsed = Self.parseResponseJSON(raw)
-                continuation.resume(returning: parsed)
+                continuation.resume(returning: Self.parseResponseJSON(String(cString: cStr)))
             }
         }
     }
 
-    private func serializeToolCall(_ toolCall: ToolCall) throws -> String {
-        let dict: [String: Any] = [
-            "function_call": [
-                "name": toolCall.name,
-                "arguments": toolCall.arguments,
-            ]
-        ]
-        let data = try JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted)
-        return String(data: data, encoding: .utf8) ?? "{}"
-    }
-
     // MARK: - Message Building
 
-    private func buildMessageJSON(
-        text: String,
-        images: [Data],
-        audio: [Data],
-        audioFormat: AudioFormat
-    ) throws -> String {
-        // For text-only, send plain text
-        if images.isEmpty && audio.isEmpty {
-            return text
-        }
+    private func buildMessageJSON(text: String, images: [Data], audio: [Data]) throws -> String {
+        if images.isEmpty && audio.isEmpty { return text }
 
-        // For multimodal, build a JSON content array
         var parts: [[String: Any]] = []
-
-        // Process images
         for imageData in images {
-            let prepared = try ImageUtilities.prepareForVision(
-                imageData, maxDimension: config.maxImageDimension)
-            let base64 = prepared.base64EncodedString()
-            parts.append([
-                "type": "image",
-                "data": base64,
-            ])
+            let prepared = try ImageUtilities.prepareForVision(imageData, maxDimension: config.maxImageDimension)
+            parts.append(["type": "image", "data": prepared.base64EncodedString()])
         }
-
-        // Process audio
         for audioData in audio {
-            let base64 = audioData.base64EncodedString()
-            parts.append([
-                "type": "audio",
-                "data": base64,
-                "format": audioFormat.rawValue,
-            ])
+            parts.append(["type": "audio", "data": audioData.base64EncodedString()])
         }
-
-        // Add text
-        parts.append([
-            "type": "text",
-            "text": text,
-        ])
+        parts.append(["type": "text", "text": text])
 
         let json: [String: Any] = ["contents": parts]
         let data = try JSONSerialization.data(withJSONObject: json, options: [])
@@ -241,26 +244,29 @@ public final class LMConversation: @unchecked Sendable {
 
     // MARK: - Response Parsing
 
-    /// Extract text from the conversation API's JSON response.
     static func parseResponseJSON(_ raw: String) -> String {
         guard let data = raw.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return raw
         }
-
-        // Try common response formats
         if let text = json["text"] as? String { return text }
         if let content = json["content"] as? String { return content }
         if let parts = json["parts"] as? [[String: Any]],
-           let firstText = parts.first?["text"] as? String {
-            return firstText
-        }
-
+           let firstText = parts.first?["text"] as? String { return firstText }
         return raw
+    }
+
+    // MARK: - Benchmark
+
+    public func benchmarkInfo() -> BenchmarkInfo? {
+        guard let conversation = cConversation else { return nil }
+        guard let info = litert_lm_conversation_get_benchmark_info(conversation) else { return nil }
+        defer { litert_lm_benchmark_info_delete(info) }
+        return BenchmarkInfo.from(cInfo: info)
     }
 }
 
-// MARK: - Engine Extension for Conversation Creation
+// MARK: - Engine Extension
 
 extension LMEngine {
 
@@ -270,28 +276,33 @@ extension LMEngine {
     ) async throws -> LMConversation {
         let engine = try requireReady()
 
-        // Create session config for the conversation
         guard let sessionCfg = litert_lm_session_config_create() else {
             throw LiteRTLMError.conversationCreationFailed
         }
         defer { litert_lm_session_config_delete(sessionCfg) }
 
-        litert_lm_session_config_set_max_output_tokens(
-            sessionCfg, configuration.maxOutputTokens)
+        litert_lm_session_config_set_max_output_tokens(sessionCfg, configuration.maxOutputTokens)
 
-        if let samplerParams = litert_lm_sampler_params_create() {
-            litert_lm_sampler_params_set_temperature(
-                samplerParams, configuration.sampler.temperature)
-            litert_lm_sampler_params_set_top_k(
-                samplerParams, configuration.sampler.topK)
-            litert_lm_sampler_params_set_top_p(
-                samplerParams, configuration.sampler.topP)
-            litert_lm_session_config_set_sampler_params(sessionCfg, samplerParams)
-            litert_lm_sampler_params_delete(samplerParams)
-        }
+        var samplerParams = configuration.sampler.toCParams()
+        litert_lm_session_config_set_sampler_params(sessionCfg, &samplerParams)
+
+        // Build tools JSON if any
+        let toolsJSON: String? = configuration.tools.isEmpty ? nil : {
+            let schemas = configuration.tools.map { $0.toJSONSchema() }
+            if let data = try? JSONSerialization.data(withJSONObject: schemas),
+               let str = String(data: data, encoding: .utf8) {
+                return str
+            }
+            return nil
+        }()
 
         guard let convConfig = litert_lm_conversation_config_create(
-            engine, sessionCfg, nil, nil, nil, false
+            engine,
+            sessionCfg,
+            nil,            // system_message_json
+            toolsJSON,      // tools_json
+            nil,            // messages_json
+            !configuration.tools.isEmpty  // enable_constrained_decoding
         ) else {
             throw LiteRTLMError.conversationCreationFailed
         }
@@ -302,10 +313,6 @@ extension LMEngine {
         }
 
         litert_lm_conversation_config_delete(convConfig)
-        return LMConversation(
-            engine: self,
-            cConversation: cConversation,
-            configuration: configuration
-        )
+        return LMConversation(engine: self, cConversation: cConversation, configuration: configuration)
     }
 }

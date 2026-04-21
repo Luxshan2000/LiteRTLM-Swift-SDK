@@ -3,16 +3,9 @@ import CLiteRTLM
 
 /// A generation session with KV-cache persistence for multi-turn text generation.
 ///
-/// Sessions maintain context across turns, making follow-up responses faster
-/// (~1-2s vs ~20s for cold start).
-///
 /// ```swift
-/// let engine = LMEngine(configuration: config)
-/// try await engine.load()
-///
 /// let session = try await engine.createSession()
-/// let stream = session.generateStream("What is Swift?")
-/// for try await token in stream {
+/// for try await token in session.generateStream("What is Swift?") {
 ///     print(token, terminator: "")
 /// }
 /// session.close()
@@ -30,11 +23,8 @@ public final class LMSession: @unchecked Sendable {
         self.sessionConfig = configuration
     }
 
-    deinit {
-        close()
-    }
+    deinit { close() }
 
-    /// Whether this session is still active.
     public var isActive: Bool { cSession != nil }
 
     /// Close the session and release KV-cache memory.
@@ -55,28 +45,30 @@ public final class LMSession: @unchecked Sendable {
 
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                guard let textInput = litert_lm_input_data_create_text(formatted) else {
-                    continuation.resume(throwing: LiteRTLMError.invalidInput(
-                        detail: "Failed to create text input"))
-                    return
-                }
-                defer { litert_lm_input_data_delete(textInput) }
+                let result = formatted.withCString { cStr -> String? in
+                    var input = InputData(
+                        type: kInputText,
+                        data: UnsafeRawPointer(cStr),
+                        size: strlen(cStr)
+                    )
+                    guard let responses = litert_lm_session_generate_content(
+                        session, &input, 1
+                    ) else { return nil }
+                    defer { litert_lm_responses_delete(responses) }
 
-                guard let responses = litert_lm_session_generate_content(
-                    session, textInput, 1
-                ) else {
-                    continuation.resume(throwing: LiteRTLMError.emptyResponse)
-                    return
+                    let count = litert_lm_responses_get_num_candidates(responses)
+                    guard count > 0,
+                          let text = litert_lm_responses_get_response_text_at(responses, 0) else {
+                        return nil
+                    }
+                    return String(cString: text)
                 }
-                defer { litert_lm_responses_delete(responses) }
 
-                let count = litert_lm_responses_get_num_candidates(responses)
-                guard count > 0,
-                      let cStr = litert_lm_responses_get_response_text_at(responses, 0) else {
+                if let result {
+                    continuation.resume(returning: result)
+                } else {
                     continuation.resume(throwing: LiteRTLMError.emptyResponse)
-                    return
                 }
-                continuation.resume(returning: String(cString: cStr))
             }
         }
     }
@@ -91,20 +83,12 @@ public final class LMSession: @unchecked Sendable {
         let q = self.queue
 
         let stream = AsyncThrowingStream<String, Error> { continuation in
-            guard let session = session else {
+            guard let session else {
                 continuation.finish(throwing: LiteRTLMError.noActiveSession)
                 return
             }
 
             q.async {
-                guard let textInput = litert_lm_input_data_create_text(formatted) else {
-                    continuation.finish(throwing: LiteRTLMError.invalidInput(
-                        detail: "Failed to create text input"))
-                    return
-                }
-                defer { litert_lm_input_data_delete(textInput) }
-
-                // Context for the C callback
                 final class StreamContext {
                     let continuation: AsyncThrowingStream<String, Error>.Continuation
                     init(_ c: AsyncThrowingStream<String, Error>.Continuation) {
@@ -114,30 +98,37 @@ public final class LMSession: @unchecked Sendable {
                 let ctx = StreamContext(continuation)
                 let ctxPtr = Unmanaged.passRetained(ctx).toOpaque()
 
+                let cStr = (formatted as NSString).utf8String!
+                var input = InputData(
+                    type: kInputText,
+                    data: UnsafeRawPointer(cStr),
+                    size: strlen(cStr)
+                )
+
                 let result = litert_lm_session_generate_content_stream(
                     session,
-                    textInput,
+                    &input,
                     1,
-                    { callbackData, token, isDone, error in
+                    { callbackData, chunk, isFinal, errorMsg in
                         guard let callbackData else { return }
                         let ctx = Unmanaged<StreamContext>.fromOpaque(callbackData)
 
-                        if let error {
-                            let msg = String(cString: error)
+                        if let errorMsg {
+                            let msg = String(cString: errorMsg)
                             ctx.takeUnretainedValue().continuation.finish(
                                 throwing: LiteRTLMError.streamingError(message: msg))
                             ctx.release()
                             return
                         }
 
-                        if let token {
-                            let str = String(cString: token)
+                        if let chunk {
+                            let str = String(cString: chunk)
                             if !str.isEmpty {
                                 ctx.takeUnretainedValue().continuation.yield(str)
                             }
                         }
 
-                        if isDone {
+                        if isFinal {
                             ctx.takeUnretainedValue().continuation.finish()
                             ctx.release()
                         }
@@ -146,11 +137,11 @@ public final class LMSession: @unchecked Sendable {
                 )
 
                 if result != 0 {
-                    let ctx = Unmanaged<StreamContext>.fromOpaque(ctxPtr)
-                    ctx.takeUnretainedValue().continuation.finish(
-                        throwing: LiteRTLMError.streamingError(
+                    Unmanaged<StreamContext>.fromOpaque(ctxPtr)
+                        .takeRetainedValue()
+                        .continuation
+                        .finish(throwing: LiteRTLMError.streamingError(
                             message: "Stream initiation failed with code \(result)"))
-                    ctx.release()
                 }
             }
         }
@@ -158,47 +149,79 @@ public final class LMSession: @unchecked Sendable {
         return TokenStream(stream)
     }
 
+    // MARK: - Multimodal Generation
+
+    /// Generate from multimodal inputs (text + images + audio).
+    public func generate(
+        text: String,
+        images: [Data] = [],
+        audio: [Data] = [],
+        template: PromptTemplate = .gemma
+    ) async throws -> String {
+        guard let session = cSession else { throw LiteRTLMError.noActiveSession }
+
+        let formatted = template.formatSingle(text)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                var inputs: [InputData] = []
+                var pinnedData: [Data] = [] // Keep data alive
+
+                // Add images
+                for imageData in images {
+                    let prepared = (try? ImageUtilities.prepareForVision(imageData, maxDimension: 1024)) ?? imageData
+                    pinnedData.append(prepared)
+                    prepared.withUnsafeBytes { ptr in
+                        inputs.append(InputData(type: kInputImage, data: ptr.baseAddress, size: ptr.count))
+                    }
+                    inputs.append(InputData(type: kInputImageEnd, data: nil, size: 0))
+                }
+
+                // Add audio
+                for audioData in audio {
+                    pinnedData.append(audioData)
+                    audioData.withUnsafeBytes { ptr in
+                        inputs.append(InputData(type: kInputAudio, data: ptr.baseAddress, size: ptr.count))
+                    }
+                    inputs.append(InputData(type: kInputAudioEnd, data: nil, size: 0))
+                }
+
+                // Add text
+                formatted.withCString { cStr in
+                    inputs.append(InputData(type: kInputText, data: UnsafeRawPointer(cStr), size: strlen(cStr)))
+
+                    guard let responses = litert_lm_session_generate_content(
+                        session, &inputs, inputs.count
+                    ) else {
+                        continuation.resume(throwing: LiteRTLMError.emptyResponse)
+                        return
+                    }
+                    defer { litert_lm_responses_delete(responses) }
+
+                    let count = litert_lm_responses_get_num_candidates(responses)
+                    guard count > 0,
+                          let text = litert_lm_responses_get_response_text_at(responses, 0) else {
+                        continuation.resume(throwing: LiteRTLMError.emptyResponse)
+                        return
+                    }
+                    continuation.resume(returning: String(cString: text))
+                }
+            }
+        }
+    }
+
     // MARK: - Benchmark
 
     /// Retrieve benchmark metrics (requires `benchmarkEnabled` in engine config).
     public func benchmarkInfo() -> BenchmarkInfo? {
         guard let session = cSession else { return nil }
-        guard let info = litert_lm_session_get_benchmark_info(session) else {
-            return nil
-        }
+        guard let info = litert_lm_session_get_benchmark_info(session) else { return nil }
         defer { litert_lm_benchmark_info_delete(info) }
-
-        let initTime = litert_lm_benchmark_info_get_total_init_time_in_second(info)
-        let ttft = litert_lm_benchmark_info_get_time_to_first_token(info)
-        let numPrefill = litert_lm_benchmark_info_get_num_prefill_turns(info)
-        let numDecode = litert_lm_benchmark_info_get_num_decode_turns(info)
-
-        var prefillTurns: [BenchmarkInfo.TurnMetric] = []
-        for i in 0..<numPrefill {
-            prefillTurns.append(.init(
-                tokensPerSecond: litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(info, i),
-                tokenCount: Int(litert_lm_benchmark_info_get_prefill_token_count_at(info, i))
-            ))
-        }
-
-        var decodeTurns: [BenchmarkInfo.TurnMetric] = []
-        for i in 0..<numDecode {
-            decodeTurns.append(.init(
-                tokensPerSecond: litert_lm_benchmark_info_get_decode_tokens_per_sec_at(info, i),
-                tokenCount: Int(litert_lm_benchmark_info_get_decode_token_count_at(info, i))
-            ))
-        }
-
-        return BenchmarkInfo(
-            initTime: initTime,
-            timeToFirstToken: ttft,
-            prefillTurns: prefillTurns,
-            decodeTurns: decodeTurns
-        )
+        return BenchmarkInfo.from(cInfo: info)
     }
 }
 
-// MARK: - Engine Extension for Session Creation
+// MARK: - Engine Extension
 
 extension LMEngine {
 
@@ -212,20 +235,10 @@ extension LMEngine {
             throw LiteRTLMError.sessionCreationFailed
         }
 
-        litert_lm_session_config_set_max_output_tokens(
-            sessionCfg, configuration.maxOutputTokens)
+        litert_lm_session_config_set_max_output_tokens(sessionCfg, configuration.maxOutputTokens)
 
-        // Set sampler
-        if let samplerParams = litert_lm_sampler_params_create() {
-            litert_lm_sampler_params_set_temperature(
-                samplerParams, configuration.sampler.temperature)
-            litert_lm_sampler_params_set_top_k(
-                samplerParams, configuration.sampler.topK)
-            litert_lm_sampler_params_set_top_p(
-                samplerParams, configuration.sampler.topP)
-            litert_lm_session_config_set_sampler_params(sessionCfg, samplerParams)
-            litert_lm_sampler_params_delete(samplerParams)
-        }
+        var samplerParams = configuration.sampler.toCParams()
+        litert_lm_session_config_set_sampler_params(sessionCfg, &samplerParams)
 
         guard let cSession = litert_lm_engine_create_session(engine, sessionCfg) else {
             litert_lm_session_config_delete(sessionCfg)
