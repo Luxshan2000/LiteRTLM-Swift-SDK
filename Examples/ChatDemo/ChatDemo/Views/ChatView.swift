@@ -8,15 +8,13 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
-        @Bindable var vm = vm
-
         NavigationStack {
             VStack(spacing: 0) {
                 if !vm.modelReady {
                     modelSetupView
                 } else {
                     messageList
-                    inputBar(vm: $vm)
+                    inputBar
                 }
             }
             .navigationTitle("ChatDemo")
@@ -29,11 +27,6 @@ struct ChatView: View {
                     }
                 }
             }
-            .alert("Error", isPresented: .constant(vm.errorMessage != nil)) {
-                Button("OK") { vm.errorMessage = nil }
-            } message: {
-                Text(vm.errorMessage ?? "")
-            }
         }
     }
 
@@ -45,7 +38,7 @@ struct ChatView: View {
 
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 64))
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.accentColor)
 
             Text("LiteRTLM Chat Demo")
                 .font(.title2.bold())
@@ -114,44 +107,45 @@ struct ChatView: View {
 
     // MARK: - Input Bar
 
-    private func inputBar(vm: Binding<ChatViewModel>) -> some View {
-        VStack(spacing: 0) {
+    private var inputBar: some View {
+        @Bindable var vm = vm
+
+        return VStack(spacing: 0) {
             Divider()
 
             // Pending image preview
-            if let imageData = self.vm.pendingImage {
-                if let uiImage = UIImage(data: imageData) {
-                    HStack {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 60, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+            if let imageData = vm.pendingImage,
+               let uiImage = UIImage(data: imageData) {
+                HStack {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 60, height: 60)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                        Spacer()
+                    Spacer()
 
-                        Button {
-                            self.vm.pendingImage = nil
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
+                    Button {
+                        vm.pendingImage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
                 }
+                .padding(.horizontal)
+                .padding(.top, 8)
             }
 
             // Voice transcript preview
-            if self.vm.speech.isListening {
+            if vm.speech.isListening {
                 HStack {
                     Circle()
                         .fill(.red)
                         .frame(width: 8, height: 8)
 
-                    Text(self.vm.speech.transcript.isEmpty
+                    Text(vm.speech.transcript.isEmpty
                          ? "Listening..."
-                         : self.vm.speech.transcript)
+                         : vm.speech.transcript)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -170,12 +164,12 @@ struct ChatView: View {
                 ) {
                     Image(systemName: "photo.fill")
                         .font(.title3)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(Color.accentColor)
                 }
                 .onChange(of: selectedPhoto) { _, newValue in
                     Task {
                         if let data = try? await newValue?.loadTransferable(type: Data.self) {
-                            self.vm.pendingImage = data
+                            vm.pendingImage = data
                         }
                         selectedPhoto = nil
                     }
@@ -183,16 +177,15 @@ struct ChatView: View {
 
                 // Voice button
                 Button {
-                    Task { await self.vm.toggleVoice() }
+                    Task { await vm.toggleVoice() }
                 } label: {
-                    Image(systemName: self.vm.speech.isListening
-                          ? "mic.fill" : "mic")
+                    Image(systemName: vm.speech.isListening ? "mic.fill" : "mic")
                         .font(.title3)
-                        .foregroundStyle(self.vm.speech.isListening ? .red : .tint)
+                        .foregroundStyle(vm.speech.isListening ? .red : Color.accentColor)
                 }
 
                 // Text field
-                TextField("Message...", text: vm.inputText, axis: .vertical)
+                TextField("Message...", text: $vm.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .focused($isInputFocused)
@@ -201,7 +194,7 @@ struct ChatView: View {
                 Button(action: sendMessage) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(canSend ? .tint : Color(.systemGray4))
+                        .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
                 }
                 .disabled(!canSend)
             }

@@ -39,7 +39,7 @@ final class ChatViewModel {
         // Step 1: Download if needed
         if !downloader.isDownloaded(ModelRegistry.gemma4E2B) {
             statusMessage = "Downloading model..."
-            await downloader.download(model: .gemma4E2B)
+            await downloader.download(model: ModelRegistry.gemma4E2B)
 
             // Track progress
             while downloader.state == .downloading {
