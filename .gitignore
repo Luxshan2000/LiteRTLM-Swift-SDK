@@ -1,0 +1,28 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# XCFramework (large binary — download or build locally)
+Frameworks/*.xcframework
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Models
+*.litertlm
+*.task
