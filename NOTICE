@@ -1,18 +1,25 @@
 LiteRTLM Swift SDK
-Copyright 2025 Luxshan Thavarasa
+Copyright (c) 2025 Luxshan Thavarasa
+Licensed under the MIT License — see LICENSE.
 
-This product includes software developed by Google LLC:
+This SDK includes the following third-party components, which are licensed
+under the Apache License, Version 2.0:
 
-  LiteRT-LM — On-device LLM inference engine
-  https://github.com/google-ai-edge/LiteRT-LM
-  Copyright 2024 Google LLC
-  Licensed under the Apache License, Version 2.0
+  CLiteRTLM.xcframework (litert_lm C API engine)
+    Source: https://github.com/google-ai-edge/LiteRT-LM
+    Copyright 2024 Google LLC
 
-The CLiteRTLM.xcframework binary distributed with this package is
-compiled from Google's LiteRT-LM C API source code, which is licensed
-under the Apache License, Version 2.0. A copy of that license is
-included in the LICENSE file at the root of this repository.
+  libGemmaModelConstraintProvider.dylib
+    Source: https://github.com/google-ai-edge/LiteRT-LM
+    Copyright 2024 Google LLC
 
-This Swift SDK is an independent wrapper and is NOT an official
-Google product. "LiteRT" and "Google" are trademarks of Google LLC,
+  libLiteRtMetalAccelerator.dylib (GPU/Metal accelerator)
+    Source: https://github.com/google-ai-edge/LiteRT
+    Copyright 2024 Google LLC
+
+The Apache License 2.0 text for these components is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+This Swift SDK is an independent wrapper and is NOT an official Google
+product. "LiteRT", "Gemma", and "Google" are trademarks of Google LLC,
 used here solely to describe the origin of the underlying runtime.

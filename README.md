@@ -7,7 +7,7 @@ Run Gemma 4 and other LLMs **entirely on-device** — text, vision, audio, and t
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://swift.org)
 [![iOS 17+](https://img.shields.io/badge/iOS-17%2B-blue.svg)](https://developer.apple.com)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue.svg)](https://developer.apple.com)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ```mermaid
 graph TB
@@ -353,14 +353,18 @@ open ChatDemo.xcodeproj
 
 ## License
 
-This project is licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
+The Swift SDK code is licensed under the **MIT License** — see [LICENSE](LICENSE).
 
-### Third-Party Notices
+### Third-Party Components (Apache 2.0)
 
-This SDK includes pre-built binaries from [Google's LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) and [LiteRT](https://github.com/google-ai-edge/LiteRT), both licensed under the Apache License 2.0.
+This SDK bundles pre-built binaries from Google, which remain under the **Apache License 2.0**:
 
-- `CLiteRTLM.xcframework` — compiled from the [LiteRT-LM C API](https://github.com/google-ai-edge/LiteRT-LM)
-- `libGemmaModelConstraintProvider.dylib` — from [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)
-- `libLiteRtMetalAccelerator.dylib` — from [Google's LiteRT prebuilts](https://github.com/google-ai-edge/LiteRT)
+| Binary | Source | License |
+|--------|--------|---------|
+| `CLiteRTLM.xcframework` | [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) | Apache 2.0 |
+| `libGemmaModelConstraintProvider.dylib` | [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) | Apache 2.0 |
+| `libLiteRtMetalAccelerator.dylib` | [LiteRT](https://github.com/google-ai-edge/LiteRT) | Apache 2.0 |
 
-**This is not an official Google product.** "LiteRT", "Gemma", and "Google" are trademarks of Google LLC, used here solely to describe the origin of the underlying runtime. See [NOTICE](NOTICE) for full attribution.
+See [NOTICE](NOTICE) for full attribution.
+
+**This is not an official Google product.** "LiteRT", "Gemma", and "Google" are trademarks of Google LLC.
