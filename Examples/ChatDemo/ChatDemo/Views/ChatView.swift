@@ -8,54 +8,41 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if !vm.modelReady {
-                    modelSetupView
-                } else {
-                    messageList
-                    inputBar
-                }
-            }
-            .navigationTitle("ChatDemo")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if vm.modelReady {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Reset") { vm.cleanup() }
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
+        if vm.modelReady {
+            chatView
+        } else {
+            modelSetupView
         }
     }
 
-    // MARK: - Model Setup
+    // MARK: - Setup
 
     private var modelSetupView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             Spacer()
-
             Image(systemName: "brain.head.profile")
-                .font(.system(size: 64))
+                .font(.system(size: 52))
                 .foregroundStyle(Color.accentColor)
-
-            Text("LiteRTLM Chat Demo")
-                .font(.title2.bold())
-
-            Text("On-device LLM powered by Gemma 4")
-                .font(.subheadline)
+            Text("LiteRTLM Chat")
+                .font(.title3.bold())
+            Text("On-device Gemma 4")
+                .font(.footnote)
                 .foregroundStyle(.secondary)
 
             if vm.isModelLoading {
-                VStack(spacing: 12) {
+                VStack(spacing: 10) {
                     ProgressView(value: vm.downloadProgress)
                         .progressViewStyle(.linear)
-                        .frame(maxWidth: 240)
-
+                        .frame(maxWidth: 260)
                     Text(vm.statusMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    if vm.downloadSpeed > 0 {
+                        Text("\(Int(vm.downloadProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             } else {
                 Button {
@@ -74,34 +61,75 @@ struct ChatView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .padding(.horizontal, 32)
             }
-
             Spacer()
         }
-        .padding()
     }
 
-    // MARK: - Messages
+    // MARK: - Chat
 
-    private var messageList: some View {
+    private var chatView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: 10) {
                     ForEach(vm.messages) { message in
-                        MessageBubble(message: message)
+                        MessageRow(message: message)
                             .id(message.id)
                     }
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            .onChange(of: vm.messages.count) {
+            .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: vm.messages.last?.text) {
                 if let last = vm.messages.last {
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
+            .safeAreaInset(edge: .top) {
+                headerBar
+            }
+            .safeAreaInset(edge: .bottom) {
+                inputBar
+            }
+        }
+        .background(Color(.systemBackground))
+    }
+
+    // MARK: - Header
+
+    private var headerBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Gemma 4")
+                    .font(.subheadline.bold())
+                HStack(spacing: 4) {
+                    if vm.isGenerating {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 12, height: 12)
+                    }
+                    Text(vm.isGenerating ? "Generating..." : "On-device")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button { vm.cleanup() } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background {
+            Color(.secondarySystemBackground)
+                .ignoresSafeArea(edges: .top)
         }
     }
 
@@ -111,61 +139,75 @@ struct ChatView: View {
         @Bindable var vm = vm
 
         return VStack(spacing: 0) {
-            Divider()
-
-            // Pending image preview
+            // Pending image
             if let imageData = vm.pendingImage,
                let uiImage = UIImage(data: imageData) {
-                HStack {
+                HStack(spacing: 8) {
                     Image(uiImage: uiImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: 60, height: 60)
+                        .frame(width: 44, height: 44)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-
                     Spacer()
-
-                    Button {
-                        vm.pendingImage = nil
-                    } label: {
+                    Button { vm.pendingImage = nil } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
             }
 
-            // Voice transcript preview
+            // Voice indicator
             if vm.speech.isListening {
-                HStack {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 8, height: 8)
-
-                    Text(vm.speech.transcript.isEmpty
-                         ? "Listening..."
-                         : vm.speech.transcript)
+                HStack(spacing: 6) {
+                    Circle().fill(.red).frame(width: 6, height: 6)
+                    Text(vm.speech.transcript.isEmpty ? "Listening..." : vm.speech.transcript)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
-
+                        .lineLimit(1)
                     Spacer()
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
             }
 
-            HStack(spacing: 12) {
-                // Photo picker
-                PhotosPicker(
-                    selection: $selectedPhoto,
-                    matching: .images
-                ) {
-                    Image(systemName: "photo.fill")
-                        .font(.title3)
+            HStack(alignment: .bottom, spacing: 8) {
+                // Plus menu
+                Menu {
+                    Section("Photo") {
+                        Button {
+                            vm.showCamera = true
+                        } label: {
+                            Label("Take Photo", systemImage: "camera")
+                        }
+                        Button {
+                            vm.showPhotoPicker = true
+                        } label: {
+                            Label("Photo Library", systemImage: "photo.on.rectangle")
+                        }
+                    }
+                    Section("Audio") {
+                        Button {
+                            Task { await vm.toggleVoice() }
+                        } label: {
+                            Label(
+                                vm.speech.isListening ? "Stop Recording" : "Voice Input",
+                                systemImage: vm.speech.isListening ? "stop.circle" : "mic"
+                            )
+                        }
+                        Button {
+                            vm.showAudioPicker = true
+                        } label: {
+                            Label("Audio File", systemImage: "waveform")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 32))
                         .foregroundStyle(Color.accentColor)
                 }
+                .photosPicker(isPresented: $vm.showPhotoPicker, selection: $selectedPhoto, matching: .images)
                 .onChange(of: selectedPhoto) { _, newValue in
                     Task {
                         if let data = try? await newValue?.loadTransferable(type: Data.self) {
@@ -175,33 +217,39 @@ struct ChatView: View {
                     }
                 }
 
-                // Voice button
-                Button {
-                    Task { await vm.toggleVoice() }
-                } label: {
-                    Image(systemName: vm.speech.isListening ? "mic.fill" : "mic")
-                        .font(.title3)
-                        .foregroundStyle(vm.speech.isListening ? .red : Color.accentColor)
-                }
-
                 // Text field
-                TextField("Message...", text: $vm.inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
+                TextField("Message", text: $vm.inputText, axis: .vertical)
+                    .font(.body)
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(.systemGray5))
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
                     .focused($isInputFocused)
 
-                // Send button
-                Button(action: sendMessage) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
+                // Send / Stop
+                if vm.isGenerating {
+                    Button { vm.stopGenerating() } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Button(action: sendMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
+                    }
+                    .disabled(!canSend)
                 }
-                .disabled(!canSend)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 10)
             .padding(.vertical, 10)
         }
-        .background(.ultraThinMaterial)
+        .background {
+            Color(.secondarySystemBackground)
+                .ignoresSafeArea(edges: .bottom)
+        }
     }
 
     private var canSend: Bool {
@@ -217,49 +265,47 @@ struct ChatView: View {
     }
 }
 
-// MARK: - Message Bubble
+// MARK: - Message Row
 
-private struct MessageBubble: View {
+private struct MessageRow: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack {
-            if message.isUser { Spacer(minLength: 48) }
+        if message.role == .system {
+            Text(message.text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+        } else {
+            HStack(alignment: .bottom, spacing: 6) {
+                if message.isUser { Spacer(minLength: 60) }
 
-            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 6) {
-                if let imageData = message.image, let uiImage = UIImage(data: imageData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 200, maxHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: message.isUser ? .trailing : .leading, spacing: 4) {
+                    if let imageData = message.image,
+                       let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 200, maxHeight: 200)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                    }
+
+                    if !message.text.isEmpty {
+                        Text(message.text)
+                            .textSelection(.enabled)
+                            .font(.body)
+                            .foregroundStyle(message.isUser ? .white : .primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(message.isUser ? Color.blue : Color(.systemGray5))
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
                 }
 
-                if !message.text.isEmpty {
-                    Text(message.text)
-                        .textSelection(.enabled)
-                        .font(.body)
-                        .foregroundStyle(textColor)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(backgroundColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
+                if !message.isUser { Spacer(minLength: 60) }
             }
-
-            if !message.isUser { Spacer(minLength: 48) }
-        }
-    }
-
-    private var textColor: Color {
-        message.isUser ? .white : .primary
-    }
-
-    private var backgroundColor: Color {
-        switch message.role {
-        case .user: return .accentColor
-        case .model: return Color(.systemGray6)
-        case .system: return Color(.systemGray5)
         }
     }
 }

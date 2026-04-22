@@ -28,5 +28,7 @@
 	<string>Select photos to ask the AI about</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Convert your speech to text</string>
+	<key>UILaunchScreen</key>
+	<dict/>
 </dict>
 </plist>

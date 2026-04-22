@@ -88,15 +88,23 @@ Add products to your target:
 .target(
     name: "YourApp",
     dependencies: [
-        .product(name: "LiteRTLM", package: "LiteRTLM"),
-        .product(name: "LiteRTLMDownloader", package: "LiteRTLM"),
+        .product(name: "LiteRTLM", package: "LiteRTLM-Swift-SDK"),
+        .product(name: "LiteRTLMDownloader", package: "LiteRTLM-Swift-SDK"),
     ]
 )
 ```
 
 Or in Xcode: **File > Add Package Dependencies** > enter the repository URL.
 
-> **Entitlement required for iOS:** Add `com.apple.developer.kernel.increased-memory-limit` to your app's entitlements. Models consume ~4 GB of RAM.
+> **Entitlements required for iOS:** Add `com.apple.developer.kernel.increased-memory-limit` and `com.apple.developer.kernel.extended-virtual-addressing` to your app's entitlements. Models consume ~4 GB of RAM.
+
+> **Codesign note:** The `CLiteRTLM.xcframework` includes a companion dynamic library (`libGemmaModelConstraintProvider.dylib`) that Xcode may not automatically re-sign. If your app crashes on launch with a `Library not loaded` / `code signature invalid` error, add a Run Script build phase:
+> ```bash
+> DYLIB="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib"
+> if [ -f "$DYLIB" ]; then
+>   /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
+> fi
+> ```
 
 ---
 
@@ -110,7 +118,7 @@ import LiteRTLMDownloader
 
 // Download the model (with progress tracking)
 let downloader = ModelDownloader()
-await downloader.download(model: .gemma4E2B) // ~2.6 GB
+await downloader.download(model: .gemma4E2B) // ~2.4 GB
 
 // Create and load the engine
 let config = EngineConfiguration(modelPath: downloader.modelPath(for: .gemma4E2B)!)

@@ -1,0 +1,5 @@
+# Binary files — prevent git from diffing or modifying line endings
+*.dylib binary
+*.framework/**/*.dylib binary
+*.xcframework/** binary
+*.a binary

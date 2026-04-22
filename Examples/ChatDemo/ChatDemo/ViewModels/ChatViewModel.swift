@@ -15,9 +15,17 @@ final class ChatViewModel {
     var isModelLoading = false
     var modelReady = false
     var downloadProgress: Double = 0
+    var downloadedBytes: Int64 = 0
+    var totalBytes: Int64 = 0
+    var downloadSpeed: Double = 0
+    var estimatedTimeLeft: String = ""
     var statusMessage = "Tap 'Load Model' to start"
     var errorMessage: String?
     var pendingImage: Data?
+    var pendingAudio: Data?
+    var showPhotoPicker = false
+    var showCamera = false
+    var showAudioPicker = false
 
     // MARK: - Services
 
@@ -28,6 +36,21 @@ final class ChatViewModel {
     private var engine: LMEngine?
     private var session: LMSession?
     private let downloader = ModelDownloader()
+    private var generationTask: Task<Void, Never>?
+
+    /// Tags that Gemma emits which should not be shown to the user.
+    private static let stripTags = [
+        "<end_of_turn>", "<start_of_turn>", "<eos>", "<bos>",
+        "<|channel>", "<channel|>", "<|think|>",
+        "<start_of_turn>model", "<start_of_turn>user",
+    ]
+
+    private static let systemPrompt = """
+    You are a helpful, friendly AI assistant running entirely on-device via \
+    LiteRTLM Swift SDK and Google's Gemma 4. You are part of a demo app that \
+    showcases on-device LLM inference. Be concise, helpful, and conversational. \
+    You can see images the user sends. Keep responses short unless asked for detail.
+    """
 
     // MARK: - Model Lifecycle
 
@@ -39,14 +62,43 @@ final class ChatViewModel {
         // Step 1: Download if needed
         if !downloader.isDownloaded(ModelRegistry.gemma4E2B) {
             statusMessage = "Downloading model..."
-            await downloader.download(model: ModelRegistry.gemma4E2B)
+            totalBytes = ModelRegistry.gemma4E2B.expectedSize ?? 0
 
-            // Track progress
-            while downloader.state == .downloading {
+            let downloadTask = Task { await downloader.download(model: ModelRegistry.gemma4E2B) }
+
+            var lastBytes: Int64 = 0
+            var lastTime = Date()
+
+            while !downloadTask.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard downloader.state == .downloading else { break }
+
+                let now = Date()
+                let currentBytes = downloader.downloadedBytes
+                let elapsed = now.timeIntervalSince(lastTime)
+
+                if elapsed > 0 {
+                    let bytesInInterval = currentBytes - lastBytes
+                    let instantSpeed = Double(bytesInInterval) / elapsed
+                    downloadSpeed = downloadSpeed == 0 ? instantSpeed : downloadSpeed * 0.7 + instantSpeed * 0.3
+                    lastBytes = currentBytes
+                    lastTime = now
+                }
+
                 downloadProgress = downloader.progress
-                statusMessage = "Downloading... \(Int(downloadProgress * 100))%"
-                try? await Task.sleep(for: .milliseconds(200))
+                downloadedBytes = currentBytes
+                if let total = downloader.totalBytes { totalBytes = total }
+
+                if downloadSpeed > 0 {
+                    let remaining = Double(totalBytes - currentBytes)
+                    let seconds = Int(remaining / downloadSpeed)
+                    estimatedTimeLeft = Self.formatDuration(seconds)
+                }
+
+                statusMessage = "\(Self.formatBytes(currentBytes)) / \(Self.formatBytes(totalBytes))  •  \(Self.formatBytes(Int64(downloadSpeed)))/s  •  \(estimatedTimeLeft) left"
             }
+
+            await downloadTask.value
 
             if case .failed(let msg) = downloader.state {
                 errorMessage = "Download failed: \(msg)"
@@ -61,10 +113,20 @@ final class ChatViewModel {
             return
         }
 
+        // Validate file size
+        let attrs = try? FileManager.default.attributesOfItem(atPath: modelPath.path)
+        let fileSize = (attrs?[.size] as? Int64) ?? 0
+        if fileSize < 500_000_000 {
+            try? FileManager.default.removeItem(at: modelPath)
+            errorMessage = "Downloaded file is invalid (\(fileSize) bytes). Deleted — tap Load Model to retry."
+            isModelLoading = false
+            return
+        }
+
         // Step 2: Load engine
         statusMessage = "Loading model into memory..."
         let config = EngineConfiguration(modelPath: modelPath)
-            .backend(.gpu)
+            .backend(.cpu)
             .logLevel(.warning)
 
         let newEngine = LMEngine(configuration: config)
@@ -77,14 +139,16 @@ final class ChatViewModel {
             statusMessage = "Creating session..."
             let sessionConfig = SessionConfiguration()
                 .maxOutputTokens(1024)
-                .sampler(.balanced)
+                .sampler(.greedy)
             session = try await newEngine.createSession(configuration: sessionConfig)
 
             modelReady = true
             statusMessage = "Ready"
+
+            // Prime the session with system prompt
             messages.append(ChatMessage(
                 role: .system,
-                text: "Model loaded. Send a message, photo, or use voice input.",
+                text: "Ready to chat. Send a message, photo, or use voice.",
                 image: nil
             ))
         } catch {
@@ -108,7 +172,6 @@ final class ChatViewModel {
         let imageData = pendingImage
         pendingImage = nil
 
-        // Add user message
         let userMessage = ChatMessage(
             role: .user,
             text: text.isEmpty ? "[Photo]" : text,
@@ -117,35 +180,51 @@ final class ChatViewModel {
         messages.append(userMessage)
         inputText = ""
 
-        // Add placeholder for model response
         let placeholder = ChatMessage(role: .model, text: "", image: nil)
         messages.append(placeholder)
         let responseIndex = messages.count - 1
 
         isGenerating = true
 
-        do {
-            // Build prompt — for images, describe via vision prompt wrapping
-            let prompt: String
-            if imageData != nil {
-                prompt = text.isEmpty
+        generationTask = Task {
+            do {
+                let prompt = Self.systemPrompt + "\n" + (text.isEmpty
                     ? "Describe what you see in this image in detail."
-                    : text
-                // Note: For actual vision, you'd use LMConversation.send(images:)
-                // This demo uses text session, so we note the image was attached
-                messages[responseIndex].text = "[Vision requires Conversation API — using text mode]\n\n"
-            } else {
-                prompt = text
+                    : text)
+
+                if let imageData {
+                    let response = try await session.generate(
+                        text: prompt,
+                        images: [imageData]
+                    )
+                    if !Task.isCancelled {
+                        messages[responseIndex].text = Self.stripGemmaTags(response)
+                    }
+                } else {
+                    let stream = session.generateStream(prompt)
+                    var buffer = ""
+                    for try await token in stream {
+                        if Task.isCancelled { break }
+                        buffer += token
+                        messages[responseIndex].text = Self.stripGemmaTags(buffer)
+                    }
+                }
+            } catch {
+                if !Task.isCancelled {
+                    messages[responseIndex].text = "Error: \(error.localizedDescription)"
+                }
             }
 
-            let stream = session.generateStream(prompt)
-            for try await token in stream {
-                messages[responseIndex].text += token
-            }
-        } catch {
-            messages[responseIndex].text = "Error: \(error.localizedDescription)"
+            isGenerating = false
+            generationTask = nil
         }
+    }
 
+    // MARK: - Stop
+
+    func stopGenerating() {
+        generationTask?.cancel()
+        generationTask = nil
         isGenerating = false
     }
 
@@ -154,7 +233,6 @@ final class ChatViewModel {
     func toggleVoice() async {
         if speech.isListening {
             speech.stopListening()
-            // Transfer transcript to input
             if !speech.transcript.isEmpty {
                 inputText = speech.transcript
             }
@@ -171,14 +249,57 @@ final class ChatViewModel {
     // MARK: - Cleanup
 
     func cleanup() {
+        stopGenerating()
         session?.close()
         session = nil
-        Task {
-            await engine?.unload()
-        }
+        Task { await engine?.unload() }
         engine = nil
         modelReady = false
         messages.removeAll()
+        downloadProgress = 0
+        downloadedBytes = 0
+        downloadSpeed = 0
+        estimatedTimeLeft = ""
         statusMessage = "Tap 'Load Model' to start"
+    }
+
+    // MARK: - Gemma Tag Stripping
+
+    private static func stripGemmaTags(_ text: String) -> String {
+        var result = text
+        for tag in stripTags {
+            result = result.replacingOccurrences(of: tag, with: "")
+        }
+        // Strip thinking blocks: <|channel>...<channel|>
+        while let start = result.range(of: "<|channel>"),
+              let end = result.range(of: "<channel|>", range: start.upperBound..<result.endIndex) {
+            result.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Formatting
+
+    static func formatBytes(_ bytes: Int64) -> String {
+        let abs = abs(bytes)
+        switch abs {
+        case 0..<1_024:
+            return "\(abs) B"
+        case 1_024..<1_048_576:
+            return String(format: "%.1f KB", Double(abs) / 1_024)
+        case 1_048_576..<1_073_741_824:
+            return String(format: "%.1f MB", Double(abs) / 1_048_576)
+        default:
+            return String(format: "%.2f GB", Double(abs) / 1_073_741_824)
+        }
+    }
+
+    static func formatDuration(_ totalSeconds: Int) -> String {
+        if totalSeconds < 60 { return "\(totalSeconds)s" }
+        let m = totalSeconds / 60
+        let s = totalSeconds % 60
+        if m < 60 { return "\(m)m \(s)s" }
+        let h = m / 60
+        return "\(h)h \(m % 60)m"
     }
 }

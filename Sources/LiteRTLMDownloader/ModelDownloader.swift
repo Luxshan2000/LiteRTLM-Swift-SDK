@@ -69,10 +69,17 @@ public final class ModelDownloader: @unchecked Sendable {
 
     // MARK: - Query
 
-    /// Check if a model is already downloaded.
+    /// Check if a model is already downloaded (and file size is plausible).
     public func isDownloaded(_ model: ModelInfo) -> Bool {
-        FileManager.default.fileExists(
-            atPath: modelsDirectory.appendingPathComponent(model.fileName).path)
+        let path = modelsDirectory.appendingPathComponent(model.fileName)
+        guard FileManager.default.fileExists(atPath: path.path) else { return false }
+        // If we know the expected size, reject files that are way too small (likely error pages)
+        if let expected = model.expectedSize {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path.path)
+            let size = (attrs?[.size] as? Int64) ?? 0
+            if size < expected / 2 { return false }
+        }
+        return true
     }
 
     /// Check if a file exists by name.

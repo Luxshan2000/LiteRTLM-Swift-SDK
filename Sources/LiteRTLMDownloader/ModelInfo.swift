@@ -37,12 +37,21 @@ public struct ModelInfo: Sendable, Identifiable {
 /// Known models available for download.
 public enum ModelRegistry {
 
-    /// Gemma 4 E2B multimodal (~2.6 GB).
+    /// Gemma 4 E2B instruction-tuned (~2.4 GB).
     public static let gemma4E2B = ModelInfo(
         name: "gemma-4-e2b",
         displayName: "Gemma 4 E2B",
-        url: URL(string: "https://huggingface.co/litert-community/Gemma3-E2B-it/resolve/main/gemma3-E2B-it-int8.litertlm")!,
-        expectedSize: 2_800_000_000,
-        fileName: "gemma3-E2B-it-int8.litertlm"
+        url: URL(string: "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm")!,
+        expectedSize: 2_583_085_056,
+        fileName: "gemma-4-E2B-it.litertlm"
+    )
+
+    /// Gemma 4 E4B instruction-tuned (~3.4 GB).
+    public static let gemma4E4B = ModelInfo(
+        name: "gemma-4-e4b",
+        displayName: "Gemma 4 E4B",
+        url: URL(string: "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm")!,
+        expectedSize: 3_654_467_584,
+        fileName: "gemma-4-E4B-it.litertlm"
     )
 }

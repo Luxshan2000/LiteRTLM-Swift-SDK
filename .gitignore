@@ -9,6 +9,12 @@ build/
 *.mode2v3
 *.perspectivev3
 *.moved-aside
+*.xcuserstate
+
+# Allow Example project to be tracked
+!Examples/**/*.xcodeproj/
+Examples/**/*.xcodeproj/xcuserdata/
+Examples/**/*.xcodeproj/project.xcworkspace/xcuserdata/
 
 # Swift Package Manager
 .build/
@@ -20,6 +26,6 @@ Package.resolved
 *.swp
 *~
 
-# Models
+# Models (large binaries — downloaded at runtime)
 *.litertlm
 *.task

@@ -8,6 +8,7 @@ struct ChatDemoApp: App {
         WindowGroup {
             ChatView()
                 .environment(chatVM)
+                .background(Color(.systemBackground).ignoresSafeArea())
         }
     }
 }

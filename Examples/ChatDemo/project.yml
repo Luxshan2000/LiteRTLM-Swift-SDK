@@ -26,6 +26,7 @@ targets:
         NSMicrophoneUsageDescription: Voice input for the chat
         NSSpeechRecognitionUsageDescription: Convert your speech to text
         NSPhotoLibraryUsageDescription: Select photos to ask the AI about
+        UILaunchScreen: {}
     entitlements:
       path: ChatDemo/ChatDemo.entitlements
       properties:
@@ -35,7 +36,18 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.litertlm.example.chatdemo
         SWIFT_VERSION: "5.9"
-        DEVELOPMENT_TEAM: HC5R66SXM5
+        # Set your Apple Development Team ID here
+        DEVELOPMENT_TEAM: ""
+    postBuildScripts:
+      - name: "Re-sign CLiteRTLM companion libraries"
+        script: |
+          # CLiteRTLM.framework ships a companion dylib that Xcode does not
+          # automatically re-sign. Codesign it with the app identity so iOS
+          # accepts it at launch time.
+          DYLIB="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib"
+          if [ -f "$DYLIB" ]; then
+            /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
+          fi
     dependencies:
       - package: LiteRTLM
         product: LiteRTLM

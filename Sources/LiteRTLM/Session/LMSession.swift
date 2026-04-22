@@ -231,21 +231,34 @@ extension LMEngine {
     ) async throws -> LMSession {
         let engine = try requireReady()
 
-        guard let sessionCfg = litert_lm_session_config_create() else {
-            throw LiteRTLMError.sessionCreationFailed
+        // Try with explicit config first, fall back to NULL (C API defaults)
+        let sessionCfg = litert_lm_session_config_create()
+
+        if let sessionCfg {
+            litert_lm_session_config_set_max_output_tokens(sessionCfg, configuration.maxOutputTokens)
+
+            var samplerParams = configuration.sampler.toCParams()
+            litert_lm_session_config_set_sampler_params(sessionCfg, &samplerParams)
         }
 
-        litert_lm_session_config_set_max_output_tokens(sessionCfg, configuration.maxOutputTokens)
+        let cSession = litert_lm_engine_create_session(engine, sessionCfg)
 
-        var samplerParams = configuration.sampler.toCParams()
-        litert_lm_session_config_set_sampler_params(sessionCfg, &samplerParams)
-
-        guard let cSession = litert_lm_engine_create_session(engine, sessionCfg) else {
+        if cSession == nil, sessionCfg != nil {
+            // Sampler may not be supported — retry with NULL config (C API defaults)
             litert_lm_session_config_delete(sessionCfg)
+
+            guard let fallback = litert_lm_engine_create_session(engine, nil) else {
+                throw LiteRTLMError.sessionCreationFailed
+            }
+            return LMSession(engine: self, cSession: fallback, configuration: configuration)
+        }
+
+        if let sessionCfg { litert_lm_session_config_delete(sessionCfg) }
+
+        guard let cSession else {
             throw LiteRTLMError.sessionCreationFailed
         }
 
-        litert_lm_session_config_delete(sessionCfg)
         return LMSession(engine: self, cSession: cSession, configuration: configuration)
     }
 }
