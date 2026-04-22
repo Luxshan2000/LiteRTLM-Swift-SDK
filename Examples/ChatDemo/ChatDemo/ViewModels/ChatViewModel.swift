@@ -26,6 +26,8 @@ final class ChatViewModel {
     var showPhotoPicker = false
     var showCamera = false
     var showAudioPicker = false
+    var isRecordingVoice: Bool { speech.isRecording }
+    var selectedBackend: String = "cpu"  // "cpu" or "gpu"
 
     // MARK: - Services
 
@@ -34,15 +36,31 @@ final class ChatViewModel {
     // MARK: - Private
 
     private var engine: LMEngine?
-    private var session: LMSession?
+    private var conversation: LMConversation?
     private let downloader = ModelDownloader()
     private var generationTask: Task<Void, Never>?
 
-    /// Tags that Gemma emits which should not be shown to the user.
-    private static let stripTags = [
-        "<end_of_turn>", "<start_of_turn>", "<eos>", "<bos>",
-        "<|channel>", "<channel|>", "<|think|>",
-        "<start_of_turn>model", "<start_of_turn>user",
+    /// Tags that Gemma 4 emits which should not be shown to the user.
+    /// Sorted longest-first so compound tags are stripped before their prefixes.
+    private static let stripTags: [String] = [
+        // Gemma 4 turn markers
+        "<|turn>model",
+        "<|turn>user",
+        "<|turn>system",
+        "<|turn>",
+        "<turn|>",
+        // Gemma 2/3 legacy markers (in case model emits them)
+        "<start_of_turn>model",
+        "<start_of_turn>user",
+        "<start_of_turn>",
+        "<end_of_turn>",
+        // Thinking / tool tags
+        "<|channel>",
+        "<channel|>",
+        "<|think|>",
+        // Special tokens
+        "<eos>",
+        "<bos>",
     ]
 
     private static let systemPrompt = """
@@ -124,9 +142,18 @@ final class ChatViewModel {
         }
 
         // Step 2: Load engine
-        statusMessage = "Loading model into memory..."
+        let backendChoice: Backend = selectedBackend == "gpu" ? .gpu : .cpu
+        statusMessage = "Loading model (\(selectedBackend.uppercased()))..."
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("litertlm_cache")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+
         let config = EngineConfiguration(modelPath: modelPath)
-            .backend(.cpu)
+            .backend(backendChoice)
+            .visionBackend(.cpu)
+            .audioBackend(.cpu)
+            .maxTokens(4096)
+            .cacheDirectory(cacheDir)
             .logLevel(.warning)
 
         let newEngine = LMEngine(configuration: config)
@@ -135,12 +162,18 @@ final class ChatViewModel {
             try await newEngine.load()
             engine = newEngine
 
-            // Step 3: Create session
+            // Step 3: Create conversation (handles text + multimodal)
             statusMessage = "Creating session..."
-            let sessionConfig = SessionConfiguration()
+            let convConfig = ConversationConfiguration()
                 .maxOutputTokens(1024)
-                .sampler(.greedy)
-            session = try await newEngine.createSession(configuration: sessionConfig)
+                .sampler(SamplerConfiguration(
+                    temperature: 0.7,
+                    topK: 40,
+                    topP: 0.95,
+                    seed: 0,
+                    samplerType: .topP
+                ))
+            conversation = try await newEngine.createConversation(configuration: convConfig)
 
             modelReady = true
             statusMessage = "Ready"
@@ -163,18 +196,25 @@ final class ChatViewModel {
 
     func send() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || pendingImage != nil else { return }
-        guard modelReady, let session else {
+        guard !text.isEmpty || pendingImage != nil || pendingAudio != nil else { return }
+        guard modelReady else {
             errorMessage = "Model not loaded"
             return
         }
 
         let imageData = pendingImage
+        let audioData = pendingAudio
         pendingImage = nil
+        pendingAudio = nil
+
+        let displayText: String
+        if !text.isEmpty { displayText = text }
+        else if imageData != nil { displayText = "[Photo]" }
+        else { displayText = "[Voice message]" }
 
         let userMessage = ChatMessage(
             role: .user,
-            text: text.isEmpty ? "[Photo]" : text,
+            text: displayText,
             image: imageData
         )
         messages.append(userMessage)
@@ -188,24 +228,35 @@ final class ChatViewModel {
 
         generationTask = Task {
             do {
-                let prompt = Self.systemPrompt + "\n" + (text.isEmpty
-                    ? "Describe what you see in this image in detail."
-                    : text)
+                let prompt = text.isEmpty
+                    ? (imageData != nil ? "Describe what you see in this image."
+                       : "Respond to this voice message.")
+                    : text
 
-                if let imageData {
-                    let response = try await session.generate(
-                        text: prompt,
-                        images: [imageData]
+                let hasMedia = imageData != nil || audioData != nil
+
+                guard let conversation else { return }
+
+                if hasMedia {
+                    // Multimodal: blocking (vision/audio processing isn't streamable)
+                    let response = try await conversation.send(
+                        prompt,
+                        images: imageData.map { [$0] } ?? [],
+                        audio: audioData.map { [$0] } ?? []
                     )
                     if !Task.isCancelled {
                         messages[responseIndex].text = Self.stripGemmaTags(response)
                     }
                 } else {
-                    let stream = session.generateStream(prompt)
+                    // Text: stream token by token
+                    let stream = try conversation.sendStream(prompt)
                     var buffer = ""
                     for try await token in stream {
                         if Task.isCancelled { break }
                         buffer += token
+                        messages[responseIndex].text = Self.displayText(from: buffer)
+                    }
+                    if !Task.isCancelled {
                         messages[responseIndex].text = Self.stripGemmaTags(buffer)
                     }
                 }
@@ -228,18 +279,18 @@ final class ChatViewModel {
         isGenerating = false
     }
 
-    // MARK: - Voice
+    // MARK: - Voice (raw audio — passed directly to model)
 
     func toggleVoice() async {
-        if speech.isListening {
-            speech.stopListening()
-            if !speech.transcript.isEmpty {
-                inputText = speech.transcript
+        if speech.isRecording {
+            // Stop recording and attach the raw audio
+            if let audioData = speech.stopRecording() {
+                pendingAudio = audioData
             }
         } else {
             let authorized = await speech.requestPermission()
             if authorized {
-                speech.startListening()
+                speech.startRecording()
             } else {
                 errorMessage = "Microphone permission denied"
             }
@@ -250,8 +301,8 @@ final class ChatViewModel {
 
     func cleanup() {
         stopGenerating()
-        session?.close()
-        session = nil
+        conversation?.close()
+        conversation = nil
         Task { await engine?.unload() }
         engine = nil
         modelReady = false
@@ -263,8 +314,33 @@ final class ChatViewModel {
         statusMessage = "Tap 'Load Model' to start"
     }
 
-    // MARK: - Gemma Tag Stripping
+    // MARK: - Gemma Tag Handling
 
+    /// For streaming: strip complete tags AND hold back any trailing `<...`
+    /// that could be a partial tag still being streamed.
+    private static func displayText(from buffer: String) -> String {
+        var text = stripGemmaTags(buffer)
+
+        // If text ends with an unclosed `<`, it might be a tag arriving
+        // token-by-token (e.g. `<end` → `<end_of` → `<end_of_turn>`).
+        // Hold it back so it never flashes in the UI.
+        if let lastOpen = text.lastIndex(of: "<") {
+            let tail = String(text[lastOpen...])
+            // No closing `>` yet — check if it could be the start of a known tag
+            if !tail.contains(">") {
+                let couldBeTag = stripTags.contains { tag in
+                    tag.hasPrefix(tail) || tail.hasPrefix(tag)
+                }
+                if couldBeTag {
+                    text = String(text[..<lastOpen])
+                }
+            }
+        }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Final pass on completed text: strip all known tags.
     private static func stripGemmaTags(_ text: String) -> String {
         var result = text
         for tag in stripTags {
@@ -274,6 +350,10 @@ final class ChatViewModel {
         while let start = result.range(of: "<|channel>"),
               let end = result.range(of: "<channel|>", range: start.upperBound..<result.endIndex) {
             result.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        // Also strip partial thinking block if stream ended mid-block
+        if let start = result.range(of: "<|channel>") {
+            result = String(result[..<start.lowerBound])
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }

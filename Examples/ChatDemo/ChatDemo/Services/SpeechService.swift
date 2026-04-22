@@ -1,83 +1,75 @@
 import Foundation
-import Speech
 import AVFoundation
 
 @Observable
 final class SpeechService {
-    var isListening = false
-    var transcript = ""
+    var isRecording = false
     var errorMessage: String?
+    private(set) var recordedAudioData: Data?
 
-    private var recognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
-
-    init() {
-        recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private var audioRecorder: AVAudioRecorder?
+    private var recordingURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("voice_input.wav")
     }
 
     func requestPermission() async -> Bool {
         await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                continuation.resume(returning: granted)
             }
         }
     }
 
-    func startListening() {
-        guard !isListening else { return }
-        guard let recognizer, recognizer.isAvailable else {
-            errorMessage = "Speech recognition not available"
-            return
-        }
+    func startRecording() {
+        guard !isRecording else { return }
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setCategory(.record, mode: .default, options: .duckOthers)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             errorMessage = "Audio session error: \(error.localizedDescription)"
             return
         }
 
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest else { return }
-        recognitionRequest.shouldReportPartialResults = true
-
-        recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self else { return }
-            if let result {
-                self.transcript = result.bestTranscription.formattedString
-            }
-            if error != nil || (result?.isFinal ?? false) {
-                self.stopListening()
-            }
-        }
-
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            self.recognitionRequest?.append(buffer)
-        }
+        // Record as WAV (Linear PCM) — the format Gemma expects
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
 
         do {
-            audioEngine.prepare()
-            try audioEngine.start()
-            isListening = true
-            transcript = ""
+            // Remove old recording
+            try? FileManager.default.removeItem(at: recordingURL)
+
+            audioRecorder = try AVAudioRecorder(url: recordingURL, settings: settings)
+            audioRecorder?.record()
+            isRecording = true
+            recordedAudioData = nil
         } catch {
-            errorMessage = "Audio engine error: \(error.localizedDescription)"
+            errorMessage = "Recording error: \(error.localizedDescription)"
         }
     }
 
-    func stopListening() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        isListening = false
+    func stopRecording() -> Data? {
+        guard isRecording else { return nil }
+
+        audioRecorder?.stop()
+        audioRecorder = nil
+        isRecording = false
+
+        // Read the recorded WAV file
+        guard let data = try? Data(contentsOf: recordingURL) else {
+            errorMessage = "Failed to read recorded audio"
+            return nil
+        }
+
+        recordedAudioData = data
+        try? FileManager.default.removeItem(at: recordingURL)
+        return data
     }
 }

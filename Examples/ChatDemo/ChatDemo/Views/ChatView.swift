@@ -45,6 +45,24 @@ struct ChatView: View {
                     }
                 }
             } else {
+                @Bindable var vm = vm
+
+                // Backend picker
+                Picker("Backend", selection: $vm.selectedBackend) {
+                    Label("CPU", systemImage: "cpu")
+                        .tag("cpu")
+                    Label("GPU (Metal)", systemImage: "gpu")
+                        .tag("gpu")
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 220)
+
+                Text(vm.selectedBackend == "gpu"
+                     ? "Faster inference via Metal"
+                     : "Compatible with all devices")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
                 Button {
                     Task { await vm.loadModel() }
                 } label: {
@@ -158,15 +176,36 @@ struct ChatView: View {
                 .padding(.top, 6)
             }
 
-            // Voice indicator
-            if vm.speech.isListening {
+            // Recording indicator
+            if vm.speech.isRecording {
                 HStack(spacing: 6) {
                     Circle().fill(.red).frame(width: 6, height: 6)
-                    Text(vm.speech.transcript.isEmpty ? "Listening..." : vm.speech.transcript)
+                    Text("Recording audio...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                     Spacer()
+                    Text("Tap mic to stop")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+            }
+
+            // Pending audio indicator
+            if vm.pendingAudio != nil {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                    Text("Audio attached")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button { vm.pendingAudio = nil } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
@@ -192,8 +231,8 @@ struct ChatView: View {
                             Task { await vm.toggleVoice() }
                         } label: {
                             Label(
-                                vm.speech.isListening ? "Stop Recording" : "Voice Input",
-                                systemImage: vm.speech.isListening ? "stop.circle" : "mic"
+                                vm.speech.isRecording ? "Stop Recording" : "Record Voice",
+                                systemImage: vm.speech.isRecording ? "stop.circle" : "mic"
                             )
                         }
                         Button {
@@ -255,7 +294,8 @@ struct ChatView: View {
     private var canSend: Bool {
         !vm.isGenerating &&
         (!vm.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-         || vm.pendingImage != nil)
+         || vm.pendingImage != nil
+         || vm.pendingAudio != nil)
     }
 
     private func sendMessage() {

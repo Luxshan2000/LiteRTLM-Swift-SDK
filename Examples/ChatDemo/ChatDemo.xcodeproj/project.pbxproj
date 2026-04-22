@@ -212,7 +212,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# CLiteRTLM.framework ships a companion dylib that Xcode does not\n# automatically re-sign. Codesign it with the app identity so iOS\n# accepts it at launch time.\nDYLIB=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib\"\nif [ -f \"$DYLIB\" ]; then\n  /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$DYLIB\"\nfi\n";
+			shellScript = "# CLiteRTLM.framework ships a companion dylib that Xcode does not\n# automatically re-sign. Codesign it with the app identity so iOS\n# accepts it at launch time.\nfor DYLIB in \\\n  \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib\" \\\n  \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libLiteRtMetalAccelerator.dylib\"; do\n  if [ -f \"$DYLIB\" ]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$DYLIB\"\n  fi\ndone\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

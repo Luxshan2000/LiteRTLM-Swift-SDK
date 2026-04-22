@@ -98,12 +98,15 @@ Or in Xcode: **File > Add Package Dependencies** > enter the repository URL.
 
 > **Entitlements required for iOS:** Add `com.apple.developer.kernel.increased-memory-limit` and `com.apple.developer.kernel.extended-virtual-addressing` to your app's entitlements. Models consume ~4 GB of RAM.
 
-> **Codesign note:** The `CLiteRTLM.xcframework` includes a companion dynamic library (`libGemmaModelConstraintProvider.dylib`) that Xcode may not automatically re-sign. If your app crashes on launch with a `Library not loaded` / `code signature invalid` error, add a Run Script build phase:
+> **Codesign note:** The `CLiteRTLM.xcframework` includes companion dynamic libraries that Xcode may not automatically re-sign. If your app crashes on launch with a `Library not loaded` / `code signature invalid` error, add a Run Script build phase:
 > ```bash
-> DYLIB="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib"
-> if [ -f "$DYLIB" ]; then
->   /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
-> fi
+> for DYLIB in \
+>   "${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib" \
+>   "${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libLiteRtMetalAccelerator.dylib"; do
+>   if [ -f "$DYLIB" ]; then
+>     /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
+>   fi
+> done
 > ```
 
 ---

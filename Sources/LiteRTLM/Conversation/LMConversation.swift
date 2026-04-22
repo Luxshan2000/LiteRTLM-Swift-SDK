@@ -108,7 +108,7 @@ public final class LMConversation: @unchecked Sendable {
             throw LiteRTLMError.noActiveConversation
         }
 
-        let messageJSON = (try? buildMessageJSON(text: text, images: images, audio: audio)) ?? text
+        let messageJSON = try buildMessageJSON(text: text, images: images, audio: audio)
 
         var contentParts: [Content] = [.text(text)]
         for img in images { contentParts.append(.image(img)) }
@@ -121,7 +121,7 @@ public final class LMConversation: @unchecked Sendable {
             q.async {
                 final class StreamCtx {
                     let cont: AsyncThrowingStream<String, Error>.Continuation
-                    var accumulated = ""
+                    var lastText = ""
                     init(_ c: AsyncThrowingStream<String, Error>.Continuation) { self.cont = c }
                 }
                 let ctx = StreamCtx(continuation)
@@ -132,24 +132,37 @@ public final class LMConversation: @unchecked Sendable {
                     { callbackData, chunk, isFinal, errorMsg in
                         guard let callbackData else { return }
                         let ctx = Unmanaged<StreamCtx>.fromOpaque(callbackData)
+                        let state = ctx.takeUnretainedValue()
 
                         if let errorMsg {
-                            ctx.takeUnretainedValue().cont.finish(
+                            state.cont.finish(
                                 throwing: LiteRTLMError.streamingError(message: String(cString: errorMsg)))
                             ctx.release()
                             return
                         }
 
                         if let chunk {
-                            let str = String(cString: chunk)
-                            if !str.isEmpty {
-                                ctx.takeUnretainedValue().accumulated += str
-                                ctx.takeUnretainedValue().cont.yield(str)
+                            let raw = String(cString: chunk)
+                            if !raw.isEmpty {
+                                // Each chunk is the full JSON response snapshot.
+                                // Parse it to extract just the text content.
+                                let currentText = LMConversation.parseResponseJSON(raw)
+
+                                // Yield only the delta (new characters since last callback)
+                                if currentText.count > state.lastText.count,
+                                   currentText.hasPrefix(state.lastText) {
+                                    let delta = String(currentText.dropFirst(state.lastText.count))
+                                    state.cont.yield(delta)
+                                } else if currentText != state.lastText {
+                                    // Text changed in a non-append way — yield full replacement
+                                    state.cont.yield(currentText)
+                                }
+                                state.lastText = currentText
                             }
                         }
 
                         if isFinal {
-                            ctx.takeUnretainedValue().cont.finish()
+                            state.cont.finish()
                             ctx.release()
                         }
                     },
@@ -225,19 +238,23 @@ public final class LMConversation: @unchecked Sendable {
     // MARK: - Message Building
 
     private func buildMessageJSON(text: String, images: [Data], audio: [Data]) throws -> String {
-        if images.isEmpty && audio.isEmpty { return text }
-
+        let tmpDir = FileManager.default.temporaryDirectory
         var parts: [[String: Any]] = []
-        for imageData in images {
+
+        for (i, imageData) in images.enumerated() {
             let prepared = try ImageUtilities.prepareForVision(imageData, maxDimension: config.maxImageDimension)
-            parts.append(["type": "image", "data": prepared.base64EncodedString()])
+            let path = tmpDir.appendingPathComponent("litertlm_img_\(i).jpg")
+            try prepared.write(to: path)
+            parts.append(["type": "image", "path": path.path])
         }
-        for audioData in audio {
-            parts.append(["type": "audio", "data": audioData.base64EncodedString()])
+        for (i, audioData) in audio.enumerated() {
+            let path = tmpDir.appendingPathComponent("litertlm_audio_\(i).wav")
+            try audioData.write(to: path)
+            parts.append(["type": "audio", "path": path.path])
         }
         parts.append(["type": "text", "text": text])
 
-        let json: [String: Any] = ["contents": parts]
+        let json: [String: Any] = ["role": "user", "content": parts]
         let data = try JSONSerialization.data(withJSONObject: json, options: [])
         return String(data: data, encoding: .utf8) ?? text
     }
@@ -249,8 +266,16 @@ public final class LMConversation: @unchecked Sendable {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return raw
         }
+        // Direct text field
         if let text = json["text"] as? String { return text }
+        // {"role":"assistant","content":[{"type":"text","text":"..."}]}
+        if let content = json["content"] as? [[String: Any]] {
+            let texts = content.compactMap { $0["text"] as? String }
+            if !texts.isEmpty { return texts.joined(separator: "\n") }
+        }
+        // Content as plain string
         if let content = json["content"] as? String { return content }
+        // {"parts":[{"text":"..."}]}
         if let parts = json["parts"] as? [[String: Any]],
            let firstText = parts.first?["text"] as? String { return firstText }
         return raw

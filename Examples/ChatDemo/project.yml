@@ -44,10 +44,13 @@ targets:
           # CLiteRTLM.framework ships a companion dylib that Xcode does not
           # automatically re-sign. Codesign it with the app identity so iOS
           # accepts it at launch time.
-          DYLIB="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib"
-          if [ -f "$DYLIB" ]; then
-            /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
-          fi
+          for DYLIB in \
+            "${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libGemmaModelConstraintProvider.dylib" \
+            "${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/libLiteRtMetalAccelerator.dylib"; do
+            if [ -f "$DYLIB" ]; then
+              /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DYLIB"
+            fi
+          done
     dependencies:
       - package: LiteRTLM
         product: LiteRTLM
