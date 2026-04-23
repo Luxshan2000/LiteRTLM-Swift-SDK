@@ -1,7 +1,7 @@
 // LiteRTLM Swift SDK
 //
 // Production-grade Swift wrapper for Google's LiteRT-LM on-device inference engine.
-// Supports iOS 17+ and macOS 14+.
+// Supports iOS 17+ and iPadOS 17+.
 //
 // Quick start:
 //
@@ -41,4 +41,6 @@
 //   conversation.close()
 //   engine.unload()
 
-// Re-export all public types for single `import LiteRTLM` convenience.
+// All public types (LMEngine, LMSession, LMConversation, TokenStream, Tool,
+// Content, Message, BenchmarkInfo, configurations, errors, etc.) are available
+// via a single `import LiteRTLM`.

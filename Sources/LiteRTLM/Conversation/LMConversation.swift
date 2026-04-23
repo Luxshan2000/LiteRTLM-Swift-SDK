@@ -214,7 +214,16 @@ public final class LMConversation: @unchecked Sendable {
         let resultJSON = try JSONSerialization.data(withJSONObject: result, options: [])
         let resultStr = String(data: resultJSON, encoding: .utf8) ?? "{}"
 
-        let toolMessage = "<start_of_turn>tool\n\(resultStr)<end_of_turn>\n<start_of_turn>model\n"
+        // Send tool result as JSON — matches the format expected by
+        // litert_lm_conversation_send_message (message_json parameter).
+        let toolResponse: [String: Any] = [
+            "role": "tool",
+            "content": [["type": "text", "text": resultStr]],
+        ]
+        let toolData = try JSONSerialization.data(withJSONObject: toolResponse)
+        guard let toolMessage = String(data: toolData, encoding: .utf8) else {
+            throw LiteRTLMError.internalError("Failed to encode tool result as JSON")
+        }
 
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {

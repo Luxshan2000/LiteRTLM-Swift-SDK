@@ -67,6 +67,13 @@ final class LiteRTLMTests: XCTestCase {
 
     func testPromptTemplateGemma() {
         let formatted = PromptTemplate.gemma.formatSingle("Hello")
+        XCTAssertTrue(formatted.contains("<|turn>user"))
+        XCTAssertTrue(formatted.contains("Hello"))
+        XCTAssertTrue(formatted.contains("<|turn>model"))
+    }
+
+    func testPromptTemplateGemmaLegacy() {
+        let formatted = PromptTemplate.gemmaLegacy.formatSingle("Hello")
         XCTAssertTrue(formatted.contains("<start_of_turn>user"))
         XCTAssertTrue(formatted.contains("Hello"))
         XCTAssertTrue(formatted.contains("<start_of_turn>model"))
@@ -83,6 +90,17 @@ final class LiteRTLMTests: XCTestCase {
             .user("How are you?"),
         ]
         let formatted = PromptTemplate.gemma.formatConversation(messages)
+        XCTAssertTrue(formatted.hasPrefix("<|turn>user"))
+        XCTAssertTrue(formatted.hasSuffix("<|turn>model\n"))
+        XCTAssertTrue(formatted.contains("Hello!"))
+    }
+
+    func testPromptTemplateLegacyConversation() {
+        let messages: [Message] = [
+            .user("Hi"),
+            .model("Hello!"),
+        ]
+        let formatted = PromptTemplate.gemmaLegacy.formatConversation(messages)
         XCTAssertTrue(formatted.hasPrefix("<start_of_turn>user"))
         XCTAssertTrue(formatted.hasSuffix("<start_of_turn>model\n"))
         XCTAssertTrue(formatted.contains("Hello!"))
@@ -156,9 +174,22 @@ final class LiteRTLMTests: XCTestCase {
     }
 
     func testConversationResponseParsing() {
+        // Plain text passthrough
         XCTAssertEqual(LMConversation.parseResponseJSON("hello"), "hello")
+        // Direct text field
         XCTAssertEqual(LMConversation.parseResponseJSON(#"{"text": "parsed"}"#), "parsed")
+        // Content as string
         XCTAssertEqual(LMConversation.parseResponseJSON(#"{"content": "content"}"#), "content")
+        // Content as array of parts
+        XCTAssertEqual(
+            LMConversation.parseResponseJSON(#"{"role":"assistant","content":[{"type":"text","text":"hello"}]}"#),
+            "hello"
+        )
+        // Parts format
+        XCTAssertEqual(
+            LMConversation.parseResponseJSON(#"{"parts":[{"text":"from parts"}]}"#),
+            "from parts"
+        )
     }
 
     func testErrorDescriptions() {

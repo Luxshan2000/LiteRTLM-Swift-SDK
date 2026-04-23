@@ -6,7 +6,6 @@ Run Gemma 4 and other LLMs **entirely on-device** — text, vision, audio, and t
 
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://swift.org)
 [![iOS 17+](https://img.shields.io/badge/iOS-17%2B-blue.svg)](https://developer.apple.com)
-[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue.svg)](https://developer.apple.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ```mermaid
@@ -342,10 +341,9 @@ open ChatDemo.xcodeproj
 
 | Requirement | Detail |
 |-------------|--------|
-| **iOS** | 17.0+ |
-| **macOS** | 14.0+ |
+| **iOS / iPadOS** | 17.0+ |
 | **Swift** | 5.9+ |
-| **Device** | iPhone 12+ / Apple Silicon Mac |
+| **Device** | iPhone 12+ / iPad with A14+ chip |
 | **RAM** | 6 GB+ available |
 | **Model** | `.litertlm` format |
 

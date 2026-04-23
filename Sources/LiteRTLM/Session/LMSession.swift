@@ -98,7 +98,13 @@ public final class LMSession: @unchecked Sendable {
                 let ctx = StreamContext(continuation)
                 let ctxPtr = Unmanaged.passRetained(ctx).toOpaque()
 
-                let cStr = (formatted as NSString).utf8String!
+                guard let cStr = (formatted as NSString).utf8String else {
+                    Unmanaged<StreamContext>.fromOpaque(ctxPtr)
+                        .takeRetainedValue()
+                        .continuation
+                        .finish(throwing: LiteRTLMError.invalidInput(detail: "Failed to encode prompt as UTF-8"))
+                    return
+                }
                 var input = InputData(
                     type: kInputText,
                     data: UnsafeRawPointer(cStr),
@@ -165,24 +171,25 @@ public final class LMSession: @unchecked Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 var inputs: [InputData] = []
-                var pinnedData: [Data] = [] // Keep data alive
+                // Use NSData for stable pointer access via .bytes property.
+                // Unlike Data.withUnsafeBytes (scoped), NSData.bytes is valid
+                // for the lifetime of the object.
+                var pinnedData: [NSData] = []
 
                 // Add images
                 for imageData in images {
                     let prepared = (try? ImageUtilities.prepareForVision(imageData, maxDimension: 1024)) ?? imageData
-                    pinnedData.append(prepared)
-                    prepared.withUnsafeBytes { ptr in
-                        inputs.append(InputData(type: kInputImage, data: ptr.baseAddress, size: ptr.count))
-                    }
+                    let nsData = prepared as NSData
+                    pinnedData.append(nsData)
+                    inputs.append(InputData(type: kInputImage, data: nsData.bytes, size: nsData.length))
                     inputs.append(InputData(type: kInputImageEnd, data: nil, size: 0))
                 }
 
                 // Add audio
                 for audioData in audio {
-                    pinnedData.append(audioData)
-                    audioData.withUnsafeBytes { ptr in
-                        inputs.append(InputData(type: kInputAudio, data: ptr.baseAddress, size: ptr.count))
-                    }
+                    let nsData = audioData as NSData
+                    pinnedData.append(nsData)
+                    inputs.append(InputData(type: kInputAudio, data: nsData.bytes, size: nsData.length))
                     inputs.append(InputData(type: kInputAudioEnd, data: nil, size: 0))
                 }
 
@@ -206,6 +213,9 @@ public final class LMSession: @unchecked Sendable {
                     }
                     continuation.resume(returning: String(cString: text))
                 }
+
+                // Prevent compiler from releasing NSData before C call completes.
+                withExtendedLifetime(pinnedData) {}
             }
         }
     }
