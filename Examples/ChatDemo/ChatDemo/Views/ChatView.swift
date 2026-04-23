@@ -121,7 +121,9 @@ struct ChatView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack {
+        @Bindable var vm = vm
+
+        return HStack {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Gemma 4")
                     .font(.subheadline.bold())
@@ -137,6 +139,19 @@ struct ChatView: View {
                 }
             }
             Spacer()
+            Button {
+                vm.showToolsSheet = true
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "wrench.and.screwdriver")
+                    if vm.toolsEnabled {
+                        Text("ON")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(vm.toolsEnabled ? Color.accentColor : .secondary)
+            }
             Button { vm.cleanup() } label: {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.caption)
@@ -148,6 +163,10 @@ struct ChatView: View {
         .background {
             Color(.secondarySystemBackground)
                 .ignoresSafeArea(edges: .top)
+        }
+        .sheet(isPresented: $vm.showToolsSheet) {
+            ToolsSheet()
+                .environment(vm)
         }
     }
 
@@ -347,6 +366,108 @@ private struct MessageRow: View {
                 if !message.isUser { Spacer(minLength: 60) }
             }
         }
+    }
+}
+
+// MARK: - Tools Sheet
+
+private struct ToolsSheet: View {
+    @Environment(ChatViewModel.self) private var vm
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Enable Tool Calling")
+                                .font(.body)
+                            Text("Let the model call functions and use results in responses")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: .constant(vm.toolsEnabled))
+                            .labelsHidden()
+                            .onChange(of: vm.toolsEnabled) { _, _ in }
+                            .onTapGesture {
+                                Task { await vm.toggleTools() }
+                                dismiss()
+                            }
+                    }
+                }
+
+                Section("Available Tools") {
+                    ForEach(SampleTools.all, id: \.name) { tool in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: iconFor(tool.name))
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 24)
+                                Text(tool.name)
+                                    .font(.subheadline.bold().monospaced())
+                            }
+                            Text(tool.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if !tool.parameters.isEmpty {
+                                HStack(spacing: 4) {
+                                    Text("Params:")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    Text(tool.parameters.map { p in
+                                        p.required ? p.name : "\(p.name)?"
+                                    }.joined(separator: ", "))
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Section("Try Saying") {
+                    ForEach(samplePrompts, id: \.self) { prompt in
+                        Button {
+                            vm.inputText = prompt
+                            dismiss()
+                        } label: {
+                            Text(prompt)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Tools")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func iconFor(_ name: String) -> String {
+        switch name {
+        case "get_weather": return "cloud.sun"
+        case "calculate": return "function"
+        case "roll_dice": return "dice"
+        default: return "wrench"
+        }
+    }
+
+    private var samplePrompts: [String] {
+        [
+            "What's the weather like in Tokyo?",
+            "Calculate 365 * 24 * 60",
+            "Roll 3 dice with 20 sides",
+            "What's the weather in London and Paris?",
+        ]
     }
 }
 

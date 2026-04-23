@@ -306,6 +306,7 @@ See [`Examples/ChatDemo`](Examples/ChatDemo) for a complete iOS chat app demonst
 - Text chat with streaming responses
 - Image attachment via PhotosPicker
 - Raw audio recording passed directly to model
+- Tool calling with sample tools (weather, calculator, dice roll)
 - Model download with speed/ETA display
 - Stop/cancel generation
 - Gemma 4 turn tag stripping

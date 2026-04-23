@@ -28,6 +28,8 @@ final class ChatViewModel {
     var showAudioPicker = false
     var isRecordingVoice: Bool { speech.isRecording }
     var selectedBackend: String = "cpu"  // "cpu" or "gpu"
+    var toolsEnabled = false
+    var showToolsSheet = false
 
     // MARK: - Services
 
@@ -164,16 +166,7 @@ final class ChatViewModel {
 
             // Step 3: Create conversation (handles text + multimodal)
             statusMessage = "Creating session..."
-            let convConfig = ConversationConfiguration()
-                .maxOutputTokens(1024)
-                .sampler(SamplerConfiguration(
-                    temperature: 0.7,
-                    topK: 40,
-                    topP: 0.95,
-                    seed: 0,
-                    samplerType: .topP
-                ))
-            conversation = try await newEngine.createConversation(configuration: convConfig)
+            conversation = try await createConversation(engine: newEngine)
 
             modelReady = true
             statusMessage = "Ready"
@@ -190,6 +183,46 @@ final class ChatViewModel {
         }
 
         isModelLoading = false
+    }
+
+    // MARK: - Tools
+
+    func toggleTools() async {
+        toolsEnabled.toggle()
+        guard modelReady, let engine else { return }
+
+        // Recreate conversation with/without tools
+        conversation?.close()
+        do {
+            conversation = try await createConversation(engine: engine)
+            messages.removeAll()
+            let toolStatus = toolsEnabled
+                ? "Tools enabled: \(SampleTools.all.map(\.name).joined(separator: ", "))"
+                : "Tools disabled"
+            messages.append(ChatMessage(role: .system, text: toolStatus, image: nil))
+        } catch {
+            errorMessage = "Failed to reconfigure: \(error.localizedDescription)"
+        }
+    }
+
+    private func createConversation(engine: LMEngine) async throws -> LMConversation {
+        var convConfig = ConversationConfiguration()
+            .maxOutputTokens(1024)
+            .sampler(SamplerConfiguration(
+                temperature: 0.7,
+                topK: 40,
+                topP: 0.95,
+                seed: 0,
+                samplerType: .topP
+            ))
+
+        if toolsEnabled {
+            convConfig = convConfig
+                .tools(SampleTools.all)
+                .toolExecution(.automatic)
+        }
+
+        return try await engine.createConversation(configuration: convConfig)
     }
 
     // MARK: - Send Message
