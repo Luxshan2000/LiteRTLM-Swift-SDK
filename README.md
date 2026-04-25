@@ -14,7 +14,7 @@ Run Gemma 4 and other LLMs **entirely on-device** — text, vision, audio, and t
   <tr>
     <td align="center"><b>Model Setup</b><br><img src="assets/screenshots/model-setup.png" width="200"/></td>
     <td align="center"><b>Text Chat</b><br><img src="assets/screenshots/text-chat.png" width="200"/></td>
-    <td align="center"><b>Vision Input</b><br><img src="assets/screenshots/vision-input.jpg" width="200"/></td>
+    <td align="center"><b>Vision Response</b><br><img src="assets/screenshots/vision-response.png" width="200"/></td>
     <td align="center"><b>Audio Response</b><br><img src="assets/screenshots/audio-response.png" width="200"/></td>
   </tr>
 </table>
