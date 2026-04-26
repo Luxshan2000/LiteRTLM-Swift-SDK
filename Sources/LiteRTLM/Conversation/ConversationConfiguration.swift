@@ -34,6 +34,9 @@ public struct ConversationConfiguration: Sendable {
     /// Maximum image dimension for vision inputs.
     public private(set) var maxImageDimension: Int = 1024
 
+    /// Optional system prompt sent at conversation creation.
+    public private(set) var systemPrompt: String?
+
     public init() {}
 
     public func maxOutputTokens(_ count: Int32) -> ConversationConfiguration {
@@ -63,6 +66,12 @@ public struct ConversationConfiguration: Sendable {
     public func maxImageDimension(_ dimension: Int) -> ConversationConfiguration {
         var copy = self
         copy.maxImageDimension = dimension
+        return copy
+    }
+
+    public func systemPrompt(_ prompt: String?) -> ConversationConfiguration {
+        var copy = self
+        copy.systemPrompt = prompt
         return copy
     }
 }

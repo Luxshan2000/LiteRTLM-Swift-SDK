@@ -1,5 +1,8 @@
 import Foundation
 import CLiteRTLM
+import os.log
+
+private let logger = Logger(subsystem: "com.litertlm", category: "conversation")
 
 /// A multi-turn conversation with automatic history, multimodal support, and tool calling.
 ///
@@ -68,7 +71,10 @@ public final class LMConversation: @unchecked Sendable {
         for aud in audio { contentParts.append(.audio(aud, format: audioFormat)) }
         history.append(Message(role: .user, content: contentParts))
 
-        let response: String = try await withCheckedThrowingContinuation { continuation in
+        // Get the raw JSON response from the C API before any text extraction.
+        // Tool call detection must happen on raw JSON where quotes are properly
+        // escaped; parseResponseJSON un-escapes them which can break nested JSON.
+        let rawResponse: String = try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard let jsonResponse = litert_lm_conversation_send_message(
                     conversation, messageJSON, nil
@@ -83,17 +89,30 @@ public final class LMConversation: @unchecked Sendable {
                     return
                 }
 
-                let raw = String(cString: cStr)
-                continuation.resume(returning: Self.parseResponseJSON(raw))
+                continuation.resume(returning: String(cString: cStr))
             }
         }
 
-        history.append(.model(response))
+        // Check for tool calls on the raw response (properly escaped JSON).
+        logger.info("📥 RAW response (\(rawResponse.count) chars): \(rawResponse.prefix(1000))")
 
-        if let toolCall = parseToolCall(response) {
+        if let toolCall = parseToolCall(rawResponse) {
+            logger.info("✅ Tool call detected: \(toolCall.name) args=\(toolCall.arguments)")
+            history.append(.model(rawResponse))
             return try await handleToolCall(toolCall, conversation: conversation)
         }
 
+        logger.warning("❌ parseToolCall returned nil")
+
+        // No tool call — extract human-readable text for display.
+        let response = Self.parseResponseJSON(rawResponse)
+        logger.info("📤 Parsed response: \(response.prefix(500))")
+
+        if response.contains("tool_calls") || response.contains("function_call") {
+            logger.error("⚠️ Response contains tool_calls but parsing failed! Raw: \(rawResponse)")
+        }
+
+        history.append(.model(response))
         return response
     }
 
@@ -190,13 +209,140 @@ public final class LMConversation: @unchecked Sendable {
     }
 
     private func parseToolCall(_ response: String) -> ToolCall? {
-        guard let data = response.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let funcCall = json["function_call"] as? [String: Any],
-              let name = funcCall["name"] as? String else {
+        // Attempt 1: Parse raw response as JSON directly.
+        if let tc = Self.tryParseToolCall(response) {
+            return tc
+        }
+
+        // Attempt 2: The model may have emitted Gemma control tokens (e.g. <|"|>)
+        // inside argument values. These contain literal quotes that break JSON
+        // parsing. Strip them from the raw string and retry.
+        let cleaned = Self.stripControlTokens(response)
+        if cleaned != response, let tc = Self.tryParseToolCall(cleaned) {
+            return tc
+        }
+
+        return nil
+    }
+
+    /// Try to extract a tool call from a JSON string, checking both top-level
+    /// and nested text/content wrappers from the C API.
+    private static func tryParseToolCall(_ str: String) -> ToolCall? {
+        guard let data = str.data(using: .utf8) else {
+            logger.error("🔴 tryParse: failed to convert string to data")
             return nil
         }
-        return ToolCall(name: name, arguments: funcCall["arguments"] as? [String: Any] ?? [:])
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            logger.error("🔴 tryParse: JSONSerialization failed. First 300 chars: \(str.prefix(300))")
+            return nil
+        }
+
+        logger.info("🔵 tryParse: top-level keys = \(Array(json.keys))")
+
+        // Check top-level for tool_calls / function_call
+        if let tc = extractToolCall(from: json) {
+            logger.info("🟢 Found tool call at top level")
+            return tc
+        }
+
+        // Check inside text/content wrapper fields (C API may wrap the response)
+        for key in ["text", "content"] {
+            if let inner = json[key] as? String {
+                logger.info("🔵 Found wrapper key '\(key)', inner length=\(inner.count)")
+                // Strip control tokens before re-parsing — the unescaped quotes
+                // from tokens like <|"|> would otherwise break JSON parsing.
+                let innerCleaned = stripControlTokens(inner)
+                logger.info("🔵 After stripControlTokens: \(innerCleaned.prefix(300))")
+                if let innerData = innerCleaned.data(using: .utf8),
+                   let innerJson = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] {
+                    logger.info("🔵 Inner JSON keys = \(Array(innerJson.keys))")
+                    if let tc = extractToolCall(from: innerJson) {
+                        logger.info("🟢 Found tool call in wrapper '\(key)'")
+                        return tc
+                    }
+                } else {
+                    logger.error("🔴 Inner JSON parse failed after cleaning. First 300: \(innerCleaned.prefix(300))")
+                }
+            }
+        }
+
+        // Content as array: [{"type":"text","text":"..."}]
+        if let content = json["content"] as? [[String: Any]] {
+            logger.info("🔵 Found content array with \(content.count) parts")
+            for (i, part) in content.enumerated() {
+                if let inner = part["text"] as? String {
+                    logger.info("🔵 Content[\(i)] text length=\(inner.count)")
+                    let innerCleaned = stripControlTokens(inner)
+                    if let innerData = innerCleaned.data(using: .utf8),
+                       let innerJson = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any],
+                       let tc = extractToolCall(from: innerJson) {
+                        logger.info("🟢 Found tool call in content[\(i)]")
+                        return tc
+                    }
+                }
+            }
+        }
+
+        logger.warning("🟡 tryParse: no tool call found in any location")
+        return nil
+    }
+
+    /// Extract a tool call from a parsed JSON dictionary.
+    private static func extractToolCall(from json: [String: Any]) -> ToolCall? {
+        // Format 1: {"function_call": {"name": "...", "arguments": {...}}}
+        if let funcCall = json["function_call"] as? [String: Any],
+           let name = funcCall["name"] as? String {
+            return ToolCall(name: name, arguments: extractArguments(funcCall["arguments"]))
+        }
+
+        // Format 2: {"tool_calls": [{"type":"function","function":{"name":"...","arguments":{...}}}]}
+        if let toolCalls = json["tool_calls"] as? [[String: Any]],
+           let first = toolCalls.first,
+           let function = first["function"] as? [String: Any],
+           let name = function["name"] as? String {
+            return ToolCall(name: name, arguments: extractArguments(function["arguments"]))
+        }
+
+        return nil
+    }
+
+    /// Extract arguments from either a dict or a JSON-encoded string, cleaning control tokens.
+    private static func extractArguments(_ value: Any?) -> [String: Any] {
+        var dict: [String: Any]?
+        if let d = value as? [String: Any] {
+            dict = d
+        } else if let str = value as? String,
+                  let data = str.data(using: .utf8),
+                  let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            dict = d
+        }
+        guard let dict else { return [:] }
+
+        // Clean Gemma control tokens from string values
+        var cleaned: [String: Any] = [:]
+        for (key, value) in dict {
+            if let str = value as? String {
+                cleaned[key] = Self.stripControlTokens(str)
+            } else {
+                cleaned[key] = value
+            }
+        }
+        return cleaned
+    }
+
+    /// Strip Gemma model control tokens that leak into tool call arguments.
+    private static func stripControlTokens(_ text: String) -> String {
+        var result = text
+        // Strip <|...|> tokens (Gemma 4 turn/control markers)
+        while let start = result.range(of: "<|"),
+              let end = result.range(of: "|>", range: start.upperBound..<result.endIndex) {
+            result.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        // Strip legacy markers
+        result = result.replacingOccurrences(of: "<start_of_turn>", with: "")
+        result = result.replacingOccurrences(of: "<end_of_turn>", with: "")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func handleToolCall(_ toolCall: ToolCall, conversation: OpaquePointer) async throws -> String {
@@ -330,10 +476,23 @@ extension LMEngine {
             return nil
         }()
 
+        // Build system message JSON if set
+        let systemJSON: String? = configuration.systemPrompt.flatMap { prompt in
+            let msg: [String: Any] = [
+                "role": "system",
+                "content": [["type": "text", "text": prompt]]
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: msg),
+               let str = String(data: data, encoding: .utf8) {
+                return str
+            }
+            return nil
+        }
+
         guard let convConfig = litert_lm_conversation_config_create(
             engine,
             sessionCfg,
-            nil,            // system_message_json
+            systemJSON,     // system_message_json
             toolsJSON,      // tools_json
             nil,            // messages_json
             !configuration.tools.isEmpty  // enable_constrained_decoding
