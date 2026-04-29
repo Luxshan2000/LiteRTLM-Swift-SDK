@@ -19,12 +19,19 @@ public final class LMConversation: @unchecked Sendable {
     private let config: ConversationConfiguration
     private let queue = DispatchQueue(label: "com.litertlm.conversation", qos: .userInitiated)
 
+    // Gemma 4's chat template has no `system` turn; the C runtime drops
+    // `system_message_json`. We fold the configured system prompt into the
+    // first user turn instead, then clear it so multi-turn sends aren't
+    // polluted.
+    private var pendingSystemPrompt: String?
+
     public private(set) var history: [Message] = []
 
     init(engine: LMEngine, cConversation: OpaquePointer, configuration: ConversationConfiguration) {
         self.engine = engine
         self.cConversation = cConversation
         self.config = configuration
+        self.pendingSystemPrompt = configuration.systemPrompt
     }
 
     deinit { close() }
@@ -64,7 +71,8 @@ public final class LMConversation: @unchecked Sendable {
             throw LiteRTLMError.noActiveConversation
         }
 
-        let messageJSON = try buildMessageJSON(text: text, images: images, audio: audio)
+        let effectiveText = consumePendingSystemPrompt(prefixing: text)
+        let messageJSON = try buildMessageJSON(text: effectiveText, images: images, audio: audio)
 
         var contentParts: [Content] = [.text(text)]
         for img in images { contentParts.append(.image(img)) }
@@ -127,7 +135,8 @@ public final class LMConversation: @unchecked Sendable {
             throw LiteRTLMError.noActiveConversation
         }
 
-        let messageJSON = try buildMessageJSON(text: text, images: images, audio: audio)
+        let effectiveText = consumePendingSystemPrompt(prefixing: text)
+        let messageJSON = try buildMessageJSON(text: effectiveText, images: images, audio: audio)
 
         var contentParts: [Content] = [.text(text)]
         for img in images { contentParts.append(.image(img)) }
@@ -392,6 +401,12 @@ public final class LMConversation: @unchecked Sendable {
 
     // MARK: - Message Building
 
+    private func consumePendingSystemPrompt(prefixing text: String) -> String {
+        guard let prompt = pendingSystemPrompt else { return text }
+        pendingSystemPrompt = nil
+        return "\(prompt)\n\n---\n\n\(text)"
+    }
+
     private func buildMessageJSON(text: String, images: [Data], audio: [Data]) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         var parts: [[String: Any]] = []
@@ -476,23 +491,14 @@ extension LMEngine {
             return nil
         }()
 
-        // Build system message JSON if set
-        let systemJSON: String? = configuration.systemPrompt.flatMap { prompt in
-            let msg: [String: Any] = [
-                "role": "system",
-                "content": [["type": "text", "text": prompt]]
-            ]
-            if let data = try? JSONSerialization.data(withJSONObject: msg),
-               let str = String(data: data, encoding: .utf8) {
-                return str
-            }
-            return nil
-        }
-
+        // We deliberately pass nil for system_message_json: the Gemma 4 chat
+        // template has no system role, and the C runtime drops this field.
+        // LMConversation folds configuration.systemPrompt into the first user
+        // turn instead — see LMConversation.pendingSystemPrompt.
         guard let convConfig = litert_lm_conversation_config_create(
             engine,
             sessionCfg,
-            systemJSON,     // system_message_json
+            nil,            // system_message_json
             toolsJSON,      // tools_json
             nil,            // messages_json
             !configuration.tools.isEmpty  // enable_constrained_decoding
