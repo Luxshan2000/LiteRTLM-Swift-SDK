@@ -208,6 +208,7 @@ final class ChatViewModel {
     private func createConversation(engine: LMEngine) async throws -> LMConversation {
         var convConfig = ConversationConfiguration()
             .maxOutputTokens(1024)
+            .systemPrompt(Self.systemPrompt)
             .sampler(SamplerConfiguration(
                 temperature: 0.7,
                 topK: 40,
